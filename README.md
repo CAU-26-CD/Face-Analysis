@@ -51,94 +51,71 @@ rehearsal-platform/
 
 ---
 
-## 🚀 로컬 개발 시작
+# Re:Action 서버 시작 가이드
 
+## 순서
+
+### 1. Docker DB 시작
 ```bash
-# 1. 가상환경 생성
-python -m venv venv
-source venv/bin/activate        # mac/linux
-
-# 2. 패키지 설치
-pip install -r requirements.txt
-
-# 3. 환경변수 설정
-cp .env.example .env
-# .env 파일 열어서 DATABASE_URL, SECRET_KEY 수정
-
-# 4. PostgreSQL 실행 (Docker 권장)
-docker run -d \
-  --name rehearsal-db \
-  -e POSTGRES_USER=user \
-  -e POSTGRES_PASSWORD=password \
-  -e POSTGRES_DB=rehearsal_db \
-  -p 5432:5432 \
-  postgres:16
-
-# 5. 서버 실행
-uvicorn app.main:app --reload --port 8000
+docker start rehearsal-db
 ```
 
-Swagger UI: http://localhost:8000/docs
+---
+
+### 2. FastAPI 서버 (터미널 1)
+```bash
+cd ~/Desktop/rehearsal-platform
+source venv/bin/activate
+uvicorn app.main:app --reload
+```
+→ `http://127.0.0.1:8000/docs` 에서 camera-session 섹션 확인
 
 ---
 
-## 📋 API 스펙 요약
-
-### Auth
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| POST | `/api/v1/auth/register` | 회원가입 → 토큰 반환 |
-| POST | `/api/v1/auth/login` | 로그인 → 토큰 반환 |
-
-### Projects
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/api/v1/projects` | 내 프로젝트 목록 |
-| POST | `/api/v1/projects` | 프로젝트 생성 (자동 4자 코드 발급) |
-| POST | `/api/v1/projects/join` | 코드로 프로젝트 조인 |
-| GET | `/api/v1/projects/{id}` | 프로젝트 상세 |
-
-### Sessions
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/api/v1/projects/{pid}/sessions` | 세션 목록 |
-| POST | `/api/v1/projects/{pid}/sessions` | 세션 생성 |
-| GET | `/api/v1/projects/{pid}/sessions/{sid}` | 세션 상세 |
-| PATCH | `/api/v1/projects/{pid}/sessions/{sid}` | 세션 수정 (in_progress 등) |
-
-### Actors (배우 태그)
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/api/v1/projects/{pid}/sessions/{sid}/actors` | 배우 목록 |
-| POST | `/api/v1/projects/{pid}/sessions/{sid}/actors` | 배우 등록 (최대 8명) |
-| DELETE | `/api/v1/projects/{pid}/sessions/{sid}/actors/{aid}` | 배우 삭제 |
-
-### Feedbacks
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/api/v1/projects/{pid}/sessions/{sid}/feedbacks` | 피드백 목록 (actor/category 필터) |
-| POST | `/api/v1/projects/{pid}/sessions/{sid}/feedbacks` | 피드백 작성 |
-| GET | `/api/v1/projects/{pid}/sessions/{sid}/feedbacks/{fid}` | 피드백 단건 |
-| DELETE | `/api/v1/projects/{pid}/sessions/{sid}/feedbacks/{fid}` | 피드백 삭제 |
-
-### Video
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/api/v1/projects/{pid}/sessions/{sid}/video` | 영상 정보 조회 |
-| POST | `/api/v1/projects/{pid}/sessions/{sid}/video/start` | 녹화 시작 (타임스탬프 기록) |
-| POST | `/api/v1/projects/{pid}/sessions/{sid}/video/upload` | 영상 파일 업로드 |
-
-### Report
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/api/v1/projects/{pid}/sessions/{sid}/report` | 세션 피드백 레포트 (배우별/카테고리별 통계) |
+### 3. ngrok (터미널 2)
+```bash
+npx ngrok http 8000
+```
+→ 출력된 `https://xxxx.ngrok-free.dev` 주소 복사
 
 ---
 
-## 🔮 향후 확장 포인트
+### 4. index.html ngrok 주소 교체
+```bash
+cd ~/Desktop/rehearsal-platform
+grep -n "ngrok" reaction-pwa/index.html
+```
 
-- **배우 자동 식별**: `video/` 엔드포인트에서 영상 처리 후 actor 매핑 (OpenCV/DeepSORT 연동)
-- **실시간 피드백**: WebSocket 추가 (`/ws/sessions/{session_id}`)
-- **단축키 지원**: 프론트엔드에서 처리, 백엔드는 현재 API 그대로 사용
-- **User-Project N:M**: 현재 단순 FK → `user_project` 조인 테이블로 확장
-- **S3 영상 저장**: `video.py`의 로컬 저장 로직을 boto3 S3 업로드로 교체
+주소가 바뀌었으면 교체:
+```bash
+# 기존 ngrok 주소를 새 주소로 교체 (xxxx 부분만 바꾸기)
+sed -i '' 's|https://기존주소.ngrok-free.dev|https://새주소.ngrok-free.dev|g' reaction-pwa/index.html
+sed -i '' 's|https://기존주소.ngrok-free.dev|https://새주소.ngrok-free.dev|g' reaction-pwa/camera.html
+```
+
+---
+
+### 5. Netlify 재배포
+```bash
+cd ~/Desktop/rehearsal-platform/reaction-pwa
+npx netlify deploy --prod
+```
+
+---
+
+## 최종 확인
+
+| 확인 항목 | 주소 |
+|-----------|------|
+| FastAPI docs | http://127.0.0.1:8000/docs |
+| ngrok 요청 로그 | http://127.0.0.1:4040 |
+| PWA (QR 페이지) | https://reaction-camera-connection.netlify.app |
+
+---
+
+## 주의사항
+
+- ngrok은 재시작할 때마다 **주소가 바뀜** → 4번 단계 반복 필요
+- DB가 없으면 서버 시작 실패 → 반드시 1번 먼저
+- 카메라는 **HTTPS에서만 동작** → Netlify 주소로 접속해야 함
+- 영상 업로드 확인: `ls ~/Desktop/rehearsal-platform/uploads/1/1/`
