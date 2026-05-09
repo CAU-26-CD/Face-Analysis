@@ -1,6 +1,25 @@
 # 🎭 Rehearsal Feedback Platform — Backend
 
-공연 리허설을 위한 영상·텍스트 기반 피드백 플랫폼 FastAPI 백엔드
+**POST** http://127.0.0.1:8000/api/v1/camera-session/create?pwa_base_url=https://reaction-camera-connection.netlify.app
+-> QR 생성해서 세션과 카메라 url 매핑해주는 api
+
+**GET** http://127.0.0.1:8000/api/v1/camera-session/Iddtrs2Zmrc7V0tO/status
+-> 촬영중인지 아닌지 판단하는 api -> status 반환 하며, 노트북 화면에 "연결됨/아님" 여부 띄워주는 api
+
+**POST** http://127.0.0.1:8000/api/v1/camera-session/fNzHb3BDQjFJ1RAD/done
+-> 영상 촬영 마무리되면 status done으로 바꿔주는 api
+
+## MAIN LOGIC
+
+핸드폰 촬영 종료
+    ↓
+video/upload 로 영상 서버에 저장
+    ↓
+저장 완료되면 camera-session/{id}/done 자동 호출  ← 이거
+    ↓
+노트북 status 폴링에서 "done" 감지
+    ↓
+노트북 화면이 매핑 화면으로 전환
 
 ---
 
