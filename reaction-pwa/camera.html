@@ -451,9 +451,10 @@
 
     async function connectSession() {
       try {
-        // 노트북 index.html에 연결됐다고 알리기 (같은 기기 테스트용 localStorage)
+        // API로 연결 상태 알리기 → 노트북 화면이 '연결됨'으로 바뀜
         if (sessionId) {
-          localStorage.setItem('reaction_connected_' + sessionId, 'true');
+          await fetch(`https://pang-promptly-thus.ngrok-free.dev/api/v1/camera-session/${sessionId}/connect`, { method: 'POST' })
+            .catch(() => {}); // 실패해도 카메라는 계속 진행
         }
         await startCamera();
         showScreen('screen-ready');
@@ -507,54 +508,52 @@
 
     function handleStop() {
       const blob = new Blob(chunks, { type: 'video/webm' });
-      simulateUpload(blob);
-    }
-
-    function simulateUpload(blob) {
-      // 실제 서버가 없을 때는 다운로드로 대체
-      // 서버 연결 시 아래 uploadToServer(blob)을 사용
-      let pct = 0;
-      const fill = document.getElementById('progressFill');
-      const pctEl = document.getElementById('progressPct');
-      const interval = setInterval(() => {
-        pct += Math.random() * 15 + 5;
-        if (pct >= 100) {
-          pct = 100;
-          clearInterval(interval);
-          fill.style.width = '100%';
-          pctEl.textContent = '100%';
-          setTimeout(() => {
-            // 로컬 저장 (테스트용)
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `reaction_${Date.now()}.webm`;
-            a.click();
-            showScreen('screen-done');
-          }, 600);
-          return;
-        }
-        fill.style.width = Math.round(pct) + '%';
-        pctEl.textContent = Math.round(pct) + '%';
-      }, 200);
+      uploadToServer(blob);
     }
 
     async function uploadToServer(blob) {
-      // 실제 서버 연결 시 사용
+      const fill = document.getElementById('progressFill');
+      const pctEl = document.getElementById('progressPct');
+
       const formData = new FormData();
-      formData.append('video', blob, `recording_${sessionId}.webm`);
-      formData.append('sessionId', sessionId);
+      formData.append('file', blob, `recording_${sessionId || Date.now()}.webm`);
+      if (sessionId) formData.append('session_id', sessionId);
 
       const xhr = new XMLHttpRequest();
+
+      // 업로드 진행률
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
           const pct = Math.round((e.loaded / e.total) * 100);
-          document.getElementById('progressFill').style.width = pct + '%';
-          document.getElementById('progressPct').textContent = pct + '%';
+          fill.style.width = pct + '%';
+          pctEl.textContent = pct + '%';
         }
       };
-      xhr.onload = () => showScreen('screen-done');
-      xhr.open('POST', '/api/upload');
+
+      // 업로드 완료
+      xhr.onload = async () => {
+        fill.style.width = '100%';
+        pctEl.textContent = '100%';
+
+        // API로 완료 상태 알리기 → 노트북 화면이 매핑 화면으로 전환
+        if (sessionId) {
+          try {
+            const res = JSON.parse(xhr.responseText);
+            const videoUrl = res.video_url || '';
+            await fetch(`https://pang-promptly-thus.ngrok-free.dev/api/v1/camera-session/${sessionId}/done?video_url=${encodeURIComponent(videoUrl)}`, {
+              method: 'POST'
+            });
+          } catch (e) {}
+        }
+        setTimeout(() => showScreen('screen-done'), 400);
+      };
+
+      xhr.onerror = () => {
+        pctEl.textContent = '실패';
+        alert('영상 전송에 실패했어요. 다시 시도해주세요.');
+      };
+
+      xhr.open('POST', 'https://pang-promptly-thus.ngrok-free.dev/api/v1/projects/1/sessions/1/video/upload');
       xhr.send(formData);
     }
 

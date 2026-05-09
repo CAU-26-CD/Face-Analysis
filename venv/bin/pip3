@@ -1,4 +1,4 @@
-#!/Users/ziwon/Downloads/rehearsal-platform/venv/bin/python3
+#!/Users/ziwon/Desktop/rehearsal-platform/venv/bin/python
 # -*- coding: utf-8 -*-
 import re
 import sys

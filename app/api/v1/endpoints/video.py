@@ -15,7 +15,7 @@ router = APIRouter(
     tags=["video"],
 )
 
-ALLOWED_MIME = {"video/mp4", "video/quicktime", "video/x-msvideo"}
+ALLOWED_MIME = {"video/mp4", "video/quicktime", "video/x-msvideo", "video/webm", "application/octet-stream"}
 
 
 @router.get("", response_model=VideoOut)
@@ -53,7 +53,7 @@ async def start_recording(
     video = Video(
         session_id=session_id,
         project_id=project_id,
-        record_started_at=datetime.now(timezone.utc),
+        record_started_at=datetime.utcnow(),
     )
     session.in_progress = True
     db.add(video)
@@ -66,7 +66,7 @@ async def upload_video(
     project_id: int,
     session_id: int,
     file: UploadFile = File(...),
-    _: User = Depends(get_current_user),
+    # _: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """녹화 종료 후 영상 파일 업로드"""
@@ -95,13 +95,13 @@ async def upload_video(
 
     if video:
         video.file_path = file_path
-        video.record_end_at = datetime.now(timezone.utc)
+        video.record_end_at = datetime.utcnow()
     else:
         video = Video(
             session_id=session_id,
             project_id=project_id,
             file_path=file_path,
-            record_end_at=datetime.now(timezone.utc),
+            record_end_at=datetime.utcnow(),
         )
         db.add(video)
 
