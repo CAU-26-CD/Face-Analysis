@@ -1,27 +1,38 @@
 # Python
-venv/
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.pyd
 .Python
-*.egg-info/
-.pytest_cache/
 
-# Environment variables
+# 가상환경
+venv/
+.venv/
+
+# 환경변수
 .env
-.env.local
-.env.*.local
 
-# IDE
-.vscode/
-.idea/
-.DS_Store
+# DB
+*.db
+*.sqlite3
 
-# Uploads
+# 업로드 영상 (용량 큼)
 uploads/
 
-.vercel
+# IDE
+.idea/
+.vscode/
+*.swp
 
-# Local Netlify folder
-.netlify
+# macOS
+.DS_Store
+__MACOSX/
+
+# 배포 캐시
+.netlify/
+.reaction-pwa/.netlify
+.vercel/
+.poetry-cache/
+
+# 테스트
+.pytest_cache/
+.coverage
