@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -48,4 +50,5 @@ def health():
     return {"status": "ok"}
 
 
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads") # 영상 파일 서빙을 위한 정적 파일 경로 설정
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
