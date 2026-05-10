@@ -1,4 +1,4 @@
-# 🎭 Rehearsal Feedback Platform — Backend
+# Rehearsal Feedback Platform — Backend
 
 **POST** http://127.0.0.1:8000/api/v1/camera-session/create?pwa_base_url=https://reaction-camera-connection.netlify.app
 -> QR 생성해서 세션과 카메라 url 매핑해주는 api
