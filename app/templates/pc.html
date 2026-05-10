@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PC 피드백 입력</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>PC용 피드백 입력</h1>
+
+    <div class="card">
+      <h2>1. 세션 선택</h2>
+      <button class="button-secondary" onclick="loadSessions()">세션 목록 새로고침</button>
+      <select id="sessionSelect"></select>
+      <div id="sessionStatus" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>2. 피드백 입력</h2>
+
+      <div class="row">
+        <div>
+          <label>사용자 ID</label>
+          <input id="userId" type="number" placeholder="예: 1" />
+        </div>
+        <div>
+          <label>배우 이름</label>
+          <input id="actorName" type="text" placeholder="예: 오지원" />
+        </div>
+      </div>
+
+      <label>카테고리</label>
+      <input id="category" type="text" placeholder="예: 대사 / 감정 / 타이밍" />
+
+      <label>피드백 내용</label>
+      <textarea id="content" placeholder="피드백을 입력하세요"></textarea>
+
+      <button onclick="createFeedback()">피드백 저장</button>
+      <div id="feedbackStatus" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>3. 피드백 목록</h2>
+      <button class="button-secondary" onclick="loadFeedbacks()">피드백 목록 불러오기</button>
+      <div id="feedbackList"></div>
+    </div>
+  </div>
+
+  <script>
+    async function loadSessions() {
+      const res = await fetch("/sessions");
+      const sessions = await res.json();
+
+      const select = document.getElementById("sessionSelect");
+      select.innerHTML = "";
+
+      sessions.forEach((session) => {
+        const option = document.createElement("option");
+        option.value = session.id;
+        option.textContent = `${session.id} - ${session.title}`;
+        select.appendChild(option);
+      });
+
+      document.getElementById("sessionStatus").innerText =
+        sessions.length > 0
+          ? `${sessions.length}개 세션 로드 완료`
+          : "세션이 없습니다.";
+    }
+
+    async function createFeedback() {
+      const sessionId = document.getElementById("sessionSelect").value;
+      const userId = Number(document.getElementById("userId").value);
+      const actorName = document.getElementById("actorName").value.trim();
+      const category = document.getElementById("category").value.trim();
+      const content = document.getElementById("content").value.trim();
+
+      if (!sessionId) {
+        alert("세션을 선택하세요.");
+        return;
+      }
+
+      if (!userId) {
+        alert("사용자 ID를 입력하세요.");
+        return;
+      }
+
+      if (!content) {
+        alert("피드백 내용을 입력하세요.");
+        return;
+      }
+
+      const res = await fetch(`/sessions/${sessionId}/feedbacks`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          actor_name: actorName || null,
+          category: category || null,
+          content: content
+        })
+      });
+
+      const data = await res.json();
+      document.getElementById("feedbackStatus").innerText =
+        "피드백 저장 결과:\n" + JSON.stringify(data, null, 2);
+
+      document.getElementById("content").value = "";
+
+      await loadFeedbacks();
+    }
+
+    async function loadFeedbacks() {
+      const sessionId = document.getElementById("sessionSelect").value;
+      if (!sessionId) {
+        alert("세션을 선택하세요.");
+        return;
+      }
+
+      const res = await fetch(`/sessions/${sessionId}/feedbacks`);
+      const feedbacks = await res.json();
+
+      const list = document.getElementById("feedbackList");
+      list.innerHTML = "";
+
+      if (feedbacks.length === 0) {
+        list.innerHTML = "<div class='status'>피드백이 없습니다.</div>";
+        return;
+      }
+
+      feedbacks.forEach((item) => {
+        const div = document.createElement("div");
+        div.className = "feedback-item";
+        div.innerHTML = `
+          <div class="meta">
+            feedback_id: ${item.id} |
+            user_id: ${item.user_id} |
+            actor: ${item.actor_name ?? "-"} |
+            category: ${item.category ?? "-"} |
+            offset: ${item.video_offset_seconds}s
+          </div>
+          <div>${item.content}</div>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    loadSessions();
+  </script>
+</body>
+</html>

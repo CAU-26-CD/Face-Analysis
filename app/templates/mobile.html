@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>아이폰용 화 제어</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>아이폰용 녹화 제어</h1>
+
+    <div class="card">
+      <h2>1. 사용자 생성</h2>
+      <input id="userName" type="text" placeholder="예: 에네나" />
+      <button onclick="createUser()">사용자 생성</button>
+      <div id="userStatus" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>2. 세션 생성</h2>
+      <input id="sessionTitle" type="text" placeholder="예: 3회차 런스루" />
+      <button onclick="createSession()">세션 생성</button>
+      <div id="sessionCreateStatus" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>3. 세션 선택</h2>
+      <button class="button-secondary" onclick="loadSessions()">세션 목록 새로고침</button>
+      <select id="sessionSelect"></select>
+      <div id="sessionStatus" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>4. 카메라 미리보기</h2>
+      <video id="preview" autoplay playsinline muted style="width: 100%; border-radius: 12px; background: black;"></video>
+      <button onclick="initCamera()">카메라 켜기</button>
+      <div id="cameraStatus" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>5. 녹화 제어</h2>
+      <button onclick="startRecording()">녹화 시작</button>
+      <button class="button-secondary" onclick="stopRecording()">녹화 종료</button>
+      <div id="recordingStatus" class="status"></div>
+    </div>
+  </div>
+
+  <script>
+    let stream = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let currentSessionId = null;
+
+    async function createUser() {
+      const name = document.getElementById("userName").value.trim();
+      if (!name) {
+        alert("사용자 이름을 입력하세요.");
+        return;
+      }
+
+      const res = await fetch("/users", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ name })
+      });
+
+      const data = await res.json();
+      document.getElementById("userStatus").innerText =
+        "생성 완료:\n" + JSON.stringify(data, null, 2);
+    }
+
+    async function createSession() {
+      const title = document.getElementById("sessionTitle").value.trim();
+      if (!title) {
+        alert("세션 제목을 입력하세요.");
+        return;
+      }
+
+      const res = await fetch("/sessions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ title })
+      });
+
+      const data = await res.json();
+      document.getElementById("sessionCreateStatus").innerText =
+        "세션 생성 완료:\n" + JSON.stringify(data, null, 2);
+
+      await loadSessions();
+    }
+
+    async function loadSessions() {
+      const res = await fetch("/sessions");
+      const sessions = await res.json();
+
+      const select = document.getElementById("sessionSelect");
+      select.innerHTML = "";
+
+      sessions.forEach((session) => {
+        const option = document.createElement("option");
+        option.value = session.id;
+        option.textContent = `${session.id} - ${session.title}`;
+        select.appendChild(option);
+      });
+
+      document.getElementById("sessionStatus").innerText =
+        sessions.length > 0
+          ? `${sessions.length}개 세션 로드 완료`
+          : "세션이 없습니다.";
+    }
+
+    async function initCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" }
+          },
+          audio: true
+        });
+
+        const preview = document.getElementById("preview");
+        preview.srcObject = stream;
+
+        document.getElementById("cameraStatus").innerText =
+          "카메라 연결 성공";
+      } catch (error) {
+        document.getElementById("cameraStatus").innerText =
+          "카메라 연결 실패: " + error.message;
+      }
+    }
+
+    async function startRecording() {
+      currentSessionId = document.getElementById("sessionSelect").value;
+
+      if (!currentSessionId) {
+        alert("세션을 먼저 선택하세요.");
+        return;
+      }
+
+      if (!stream) {
+        alert("먼저 카메라를 켜세요.");
+        return;
+      }
+
+      try {
+        recordedChunks = [];
+
+        let options = {};
+        if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {
+          options.mimeType = "video/webm;codecs=vp8,opus";
+        } else if (MediaRecorder.isTypeSupported("video/webm")) {
+          options.mimeType = "video/webm";
+        } else if (MediaRecorder.isTypeSupported("video/mp4")) {
+          options.mimeType = "video/mp4";
+        }
+
+        mediaRecorder = new MediaRecorder(stream, options);
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            recordedChunks.push(event.data);
+          }
+        };
+
+        mediaRecorder.onerror = (event) => {
+          document.getElementById("recordingStatus").innerText =
+            "녹화 에러 발생";
+          console.error(event);
+        };
+
+        mediaRecorder.start(1000);
+
+        const res = await fetch(`/sessions/${currentSessionId}/start-recording`, {
+          method: "POST"
+        });
+
+        const data = await res.json();
+
+        document.getElementById("recordingStatus").innerText =
+          "녹화 시작됨\n" + JSON.stringify(data, null, 2);
+      } catch (error) {
+        document.getElementById("recordingStatus").innerText =
+          "녹화 시작 실패: " + error.message;
+      }
+    }
+
+    async function stopRecording() {
+      if (!mediaRecorder) {
+        alert("현재 녹화 중이 아닙니다.");
+        return;
+      }
+
+      if (mediaRecorder.state === "inactive") {
+        alert("이미 녹화가 종료되었습니다.");
+        return;
+      }
+
+      mediaRecorder.onstop = async () => {
+        try {
+          const mimeType = mediaRecorder.mimeType || "video/webm";
+          const extension = mimeType.includes("mp4") ? "mp4" : "webm";
+          const blob = new Blob(recordedChunks, { type: mimeType });
+
+          const formData = new FormData();
+          formData.append("file", blob, `recording.${extension}`);
+
+          document.getElementById("recordingStatus").innerText =
+            "영상 업로드 중...";
+
+          const uploadRes = await fetch(`/sessions/${currentSessionId}/video`, {
+            method: "POST",
+            body: formData
+          });
+
+          const uploadData = await uploadRes.json();
+
+          const endRes = await fetch(`/sessions/${currentSessionId}/end-recording`, {
+            method: "POST"
+          });
+
+          const endData = await endRes.json();
+
+          document.getElementById("recordingStatus").innerText =
+            "녹화 종료 및 업로드 완료\n\n업로드:\n" +
+            JSON.stringify(uploadData, null, 2) +
+            "\n\n종료:\n" +
+            JSON.stringify(endData, null, 2);
+        } catch (error) {
+          document.getElementById("recordingStatus").innerText =
+            "업로드/종료 실패: " + error.message;
+        }
+      };
+
+      mediaRecorder.stop();
+    }
+
+    loadSessions();
+  </script>
+</body>
+</html>
