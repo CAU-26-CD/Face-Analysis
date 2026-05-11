@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Re:Action Camera</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #000;
+      color: #fff;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* ── 공통 화면 ── */
+    .screen {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+    }
+    .screen.active { display: flex; }
+
+    /* ── M-1: 연결 화면 ── */
+    #screen-connect {
+      background: #fff;
+      color: #000;
+      padding: 40px 24px 32px;
+      justify-content: flex-start;
+    }
+    .connect-logo {
+      font-size: 13px;
+      font-weight: 600;
+      color: #000;
+      margin-bottom: 32px;
+    }
+    .connect-title {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .connect-sub {
+      font-size: 14px;
+      color: #888;
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+    .code-label-sm {
+      font-size: 12px;
+      color: #aaa;
+      margin-bottom: 8px;
+    }
+    .code-inputs {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .code-box {
+      width: 44px;
+      height: 50px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 700;
+      color: #000;
+      background: #fafafa;
+    }
+    .code-dot { font-size: 16px; color: #ccc; }
+    .btn-full {
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      margin-bottom: 10px;
+      transition: opacity 0.15s;
+    }
+    .btn-full:active { opacity: 0.7; }
+    .btn-secondary {
+      background: #f2f2f2;
+      color: #000;
+    }
+    .btn-primary {
+      background: #000;
+      color: #fff;
+    }
+    .connect-hint {
+      font-size: 12px;
+      color: #bbb;
+      text-align: center;
+      margin-top: 8px;
+    }
+
+    /* ── M-2: 카메라 대기 ── */
+    #screen-ready {
+      background: #000;
+    }
+    .cam-header {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      padding: 52px 20px 12px;
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .session-info {
+      background: rgba(0,0,0,0.5);
+      border-radius: 8px;
+      padding: 6px 10px;
+    }
+    .session-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .session-sub {
+      font-size: 11px;
+      color: rgba(255,255,255,0.6);
+    }
+    .connected-badge {
+      background: rgba(46,168,107,0.2);
+      border: 1px solid rgba(46,168,107,0.5);
+      border-radius: 20px;
+      padding: 5px 10px;
+      font-size: 12px;
+      color: #4cd68a;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .green-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #2ea86b;
+    }
+    #videoReady, #videoRec {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .cam-bottom {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: 20px 20px 44px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+    .cam-hint {
+      font-size: 13px;
+      color: rgba(255,255,255,0.7);
+    }
+    .shutter-btn {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      border: 3px solid #fff;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .shutter-inner {
+      width: 56px; height: 56px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.1s;
+    }
+    .shutter-btn:active .shutter-inner { transform: scale(0.9); }
+
+    /* ── M-3: 촬영 중 ── */
+    #screen-recording {
+      background: #000;
+    }
+    .rec-header {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      padding: 52px 20px 12px;
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .rec-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .rec-dot-anim {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #e53;
+      animation: recblink 1s ease-in-out infinite;
+    }
+    @keyframes recblink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .timer {
+      font-size: 16px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      font-family: 'SF Mono', monospace;
+    }
+    .actor-tags {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .actor-tag {
+      background: rgba(255,255,255,0.15);
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+    }
+    .stop-btn {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      border: 3px solid #fff;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .stop-inner {
+      width: 26px; height: 26px;
+      background: #e53;
+      border-radius: 5px;
+      transition: transform 0.1s;
+    }
+    .stop-btn:active .stop-inner { transform: scale(0.9); }
+    .stop-hint {
+      font-size: 12px;
+      color: rgba(255,255,255,0.5);
+    }
+
+    /* ── M-4: 업로드 중 ── */
+    #screen-uploading {
+      background: #fff;
+      color: #000;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 40px 32px;
+    }
+    .upload-title { font-size: 20px; font-weight: 700; }
+    .upload-sub { font-size: 14px; color: #888; }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid #eee;
+      border-top-color: #000;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-wrap {
+      width: 100%;
+      height: 4px;
+      background: #eee;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: #000;
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.2s ease;
+    }
+    .progress-pct {
+      font-size: 13px;
+      color: #888;
+      font-variant-numeric: tabular-nums;
+    }
+    .upload-hint {
+      font-size: 12px;
+      color: #bbb;
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    /* ── M-5: 완료 ── */
+    #screen-done {
+      background: #fff;
+      color: #000;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 40px 32px;
+    }
+    .done-circle {
+      width: 60px; height: 60px;
+      border-radius: 50%;
+      background: #d4f1e4;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .done-title { font-size: 22px; font-weight: 700; }
+    .done-sub {
+      font-size: 14px;
+      color: #888;
+      text-align: center;
+      line-height: 1.6;
+    }
+    .btn-reconnect {
+      width: 100%;
+      padding: 14px;
+      border: 1.5px solid #ddd;
+      border-radius: 10px;
+      background: transparent;
+      font-size: 14px;
+      color: #000;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    .btn-reconnect:active { background: #f5f5f5; }
+  </style>
+</head>
+<body>
+
+  <!-- M-1: 연결 -->
+  <div class="screen active" id="screen-connect">
+    <div class="connect-logo">Re:Action</div>
+    <div class="connect-title">Re:Action 연결</div>
+    <div class="connect-sub">코드를 입력하거나 QR을 스캔하세요</div>
+
+    <div class="code-label-sm">연결 코드</div>
+    <div class="code-inputs">
+      <div class="code-box" id="c0">—</div>
+      <div class="code-box" id="c1">—</div>
+      <div class="code-dot">·</div>
+      <div class="code-box" id="c2">—</div>
+      <div class="code-box" id="c3">—</div>
+    </div>
+
+    <button class="btn-full btn-secondary" onclick="scanQR()">QR 스캔</button>
+    <button class="btn-full btn-primary" onclick="connectSession()">연결</button>
+    <div class="connect-hint">Re:Action 앱 또는 브라우저에서 실행</div>
+  </div>
+
+  <!-- M-2: 카메라 대기 -->
+  <div class="screen" id="screen-ready">
+    <video id="videoReady" autoplay playsinline muted></video>
+    <div class="cam-header">
+      <div class="session-info">
+        <div class="session-title" id="readyTitle">4회차 런쓰루</div>
+        <div class="session-sub">실비아, 살다</div>
+      </div>
+      <div class="connected-badge">
+        <div class="green-dot"></div>
+        연결됨
+      </div>
+    </div>
+    <div class="cam-bottom">
+      <div class="cam-hint">촬영을 시작해주세요</div>
+      <button class="shutter-btn" onclick="startRecording()">
+        <div class="shutter-inner"></div>
+      </button>
+    </div>
+  </div>
+
+  <!-- M-3: 촬영 중 -->
+  <div class="screen" id="screen-recording">
+    <video id="videoRec" autoplay playsinline muted></video>
+    <div class="rec-header">
+      <div class="rec-badge">
+        <div class="rec-dot-anim"></div>
+        REC
+      </div>
+      <div class="timer" id="timerDisplay">00:00</div>
+    </div>
+    <div class="cam-bottom">
+      <div class="actor-tags" id="actorTags">
+        <div class="actor-tag">오지원</div>
+        <div class="actor-tag">이예나</div>
+        <div class="actor-tag">조현정</div>
+      </div>
+      <button class="stop-btn" onclick="stopRecording()">
+        <div class="stop-inner"></div>
+      </button>
+      <div class="stop-hint">■ 누르면 촬영 종료 후 전송</div>
+    </div>
+  </div>
+
+  <!-- M-4: 업로드 중 -->
+  <div class="screen" id="screen-uploading">
+    <div class="upload-title">영상 전송 중</div>
+    <div class="upload-sub">웹으로 영상을 보내고 있어요</div>
+    <div class="spinner"></div>
+    <div class="progress-wrap" style="width:100%;max-width:240px">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-pct" id="progressPct">0%</div>
+    <div class="upload-hint">완료 후 웹에서<br>배우 매핑을 진행해주세요</div>
+  </div>
+
+  <!-- M-5: 완료 -->
+  <div class="screen" id="screen-done">
+    <div class="done-circle">
+      <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+        <path d="M5 13l6 6 10-10" stroke="#2ea86b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="done-title">전송 완료!</div>
+    <div class="done-sub">웹 화면에서<br>배우 매핑을 계속하세요</div>
+    <button class="btn-reconnect" onclick="goConnect()">다시 연결하기</button>
+  </div>
+
+  <script>
+    let sessionId = '';
+    let stream = null;
+    let mediaRecorder = null;
+    let chunks = [];
+    let timerInterval = null;
+    let elapsedSec = 0;
+
+    // URL에서 세션 파라미터 읽기 (QR로 접속 시 자동 연결)
+    function init() {
+      const params = new URLSearchParams(location.search);
+      const session = params.get('session');
+      const code = params.get('code');
+
+      if (session && code) {
+        sessionId = session;
+        // 코드 박스 채우기
+        const rawCode = code.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        ['c0','c1','c2','c3'].forEach((id, i) => {
+          document.getElementById(id).textContent = rawCode[i] || '—';
+        });
+        // QR 접속이면 바로 카메라로
+        connectSession();
+      }
+    }
+
+    async function connectSession() {
+      try {
+        // API로 연결 상태 알리기 → 노트북 화면이 '연결됨'으로 바뀜
+        if (sessionId) {
+          await fetch(`https://pang-promptly-thus.ngrok-free.dev/api/v1/camera-session/${sessionId}/connect`, { method: 'POST' })
+            .catch(() => {}); // 실패해도 카메라는 계속 진행
+        }
+        await startCamera();
+        showScreen('screen-ready');
+      } catch (err) {
+        alert('카메라 권한이 필요해요.\n설정에서 카메라 접근을 허용해주세요.\n\n(' + err.message + ')');
+      }
+    }
+
+    async function startCamera() {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: true
+      });
+      document.getElementById('videoReady').srcObject = stream;
+      document.getElementById('videoRec').srcObject = stream;
+    }
+
+    function startRecording() {
+      chunks = [];
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+        ? 'video/webm;codecs=vp9'
+        : 'video/webm';
+      mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      mediaRecorder.onstop = handleStop;
+      mediaRecorder.start(1000); // 1초마다 chunk 수집
+
+      elapsedSec = 0;
+      updateTimer();
+      timerInterval = setInterval(updateTimer, 1000);
+
+      showScreen('screen-recording');
+    }
+
+    function stopRecording() {
+      clearInterval(timerInterval);
+      mediaRecorder.stop();
+      showScreen('screen-uploading');
+    }
+
+    function updateTimer() {
+      elapsedSec++;
+      const m = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+      const s = String(elapsedSec % 60).padStart(2, '0');
+      document.getElementById('timerDisplay').textContent = m + ':' + s;
+    }
+
+    function handleStop() {
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      uploadToServer(blob);
+    }
+
+    async function uploadToServer(blob) {
+      const fill = document.getElementById('progressFill');
+      const pctEl = document.getElementById('progressPct');
+
+      const formData = new FormData();
+      formData.append('file', blob, `recording_${sessionId || Date.now()}.webm`);
+      if (sessionId) formData.append('session_id', sessionId);
+
+      const xhr = new XMLHttpRequest();
+
+      // 업로드 진행률
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          fill.style.width = pct + '%';
+          pctEl.textContent = pct + '%';
+        }
+      };
+
+      // 업로드 완료
+      xhr.onload = async () => {
+        fill.style.width = '100%';
+        pctEl.textContent = '100%';
+
+        // API로 완료 상태 알리기 → 노트북 화면이 매핑 화면으로 전환
+        if (sessionId) {
+          try {
+            const res = JSON.parse(xhr.responseText);
+            const videoUrl = res.video_url || '';
+            await fetch(`https://pang-promptly-thus.ngrok-free.dev/api/v1/camera-session/${sessionId}/done?video_url=${encodeURIComponent(videoUrl)}`, {
+              method: 'POST'
+            });
+          } catch (e) {}
+        }
+        setTimeout(() => showScreen('screen-done'), 400);
+      };
+
+      xhr.onerror = () => {
+        pctEl.textContent = '실패';
+        alert('영상 전송에 실패했어요. 다시 시도해주세요.');
+      };
+
+      xhr.open('POST', 'https://pang-promptly-thus.ngrok-free.dev/api/v1/projects/1/sessions/1/video/upload');
+      xhr.send(formData);
+    }
+
+    function scanQR() {
+      alert('QR 스캔은 실제 기기에서 카메라 앱으로 스캔해주세요.\n노트북 index.html의 QR 코드를 찍으면 자동 연결됩니다.');
+    }
+
+    function goConnect() {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      sessionId = '';
+      history.replaceState({}, '', '/camera.html');
+      ['c0','c1','c2','c3'].forEach(id => {
+        document.getElementById(id).textContent = '—';
+      });
+      showScreen('screen-connect');
+    }
+
+    function showScreen(id) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+    }
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+    }
+
+    init();
+  </script>
+</body>
+</html>

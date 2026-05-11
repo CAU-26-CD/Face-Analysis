@@ -1,40 +1,38 @@
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
+.Python
 
-# Virtual environment
-.venv/
+# 가상환경
 venv/
-env/
+.venv/
 
-# Environment variables
+# 환경변수
 .env
 
-# SQLite
+# DB
 *.db
 *.sqlite3
 
-# Poetry
-poetry.toml
+# 업로드 영상 (용량 큼)
+uploads/
 
-# VSCode
+# IDE
+.idea/
 .vscode/
+*.swp
 
 # macOS
 .DS_Store
+__MACOSX/
 
-# Test / coverage
+# 배포 캐시
+.netlify/
+.reaction-pwa/.netlify
+.vercel/
+.poetry-cache/
+
+# 테스트
 .pytest_cache/
 .coverage
-htmlcov/
-
-# Type check / lint cache
-.mypy_cache/
-.ruff_cache/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Logs
-*.log

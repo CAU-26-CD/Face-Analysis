@@ -1,117 +1,121 @@
-# Backend 프로젝트 실행 방법
+# Rehearsal Feedback Platform — Backend
 
-## 개요
+**POST** http://127.0.0.1:8000/api/v1/camera-session/create?pwa_base_url=https://reaction-camera-connection.netlify.app
+-> QR 생성해서 세션과 카메라 url 매핑해주는 api
 
-이 프로젝트는 FastAPI 기반 백엔드 서버입니다.
-패키지 관리는 Poetry를 사용하며, 외부 기기에서 접속하기 위해 Cloudflare Tunnel을 사용할 수 있습니다.
+**GET** http://127.0.0.1:8000/api/v1/camera-session/Iddtrs2Zmrc7V0tO/status
+-> 촬영중인지 아닌지 판단하는 api -> status 반환 하며, 노트북 화면에 "연결됨/아님" 여부 띄워주는 api
 
-## 1. 백엔드 서버 실행
+**POST** http://127.0.0.1:8000/api/v1/camera-session/fNzHb3BDQjFJ1RAD/done
+-> 영상 촬영 마무리되면 status done으로 바꿔주는 api
 
-프로젝트 루트 디렉토리에서 FastAPI 서버를 실행합니다.
+## MAIN LOGIC
 
-```bash
-poetry run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+핸드폰 촬영 종료
+    ↓
+video/upload 로 영상 서버에 저장
+    ↓
+저장 완료되면 camera-session/{id}/done 자동 호출  ← 이거
+    ↓
+노트북 status 폴링에서 "done" 감지
+    ↓
+노트북 화면이 매핑 화면으로 전환
+
+---
+
+## 📁 프로젝트 구조
+
 ```
-
-`poetry run`을 사용하면 Poetry가 관리하는 가상환경 안에서 명령어가 실행됩니다.  
-따라서 별도로 가상환경을 직접 활성화하지 않아도 됩니다.
-
-서버가 정상적으로 실행되면 로컬에서 아래 주소로 접속할 수 있습니다.
-
-```text
-http://localhost:8000
+rehearsal-platform/
+├── app/
+│   ├── main.py                  # FastAPI 앱 진입점
+│   ├── core/
+│   │   ├── config.py            # 환경변수 설정
+│   │   ├── database.py          # SQLAlchemy async 엔진
+│   │   ├── security.py          # JWT / 비밀번호 해싱
+│   │   └── deps.py              # 공통 Depends (현재 유저 등)
+│   ├── models/
+│   │   └── models.py            # ORM 모델 (ERD 기반)
+│   ├── schemas/
+│   │   └── schemas.py           # Pydantic Request/Response
+│   └── api/v1/endpoints/
+│       ├── auth.py              # 회원가입 / 로그인
+│       ├── projects.py          # 프로젝트 CRUD + 조인
+│       ├── sessions.py          # 세션 CRUD
+│       ├── actors.py            # 배우 태그 관리
+│       ├── feedbacks.py         # 피드백 작성/조회/삭제
+│       ├── video.py             # 영상 업로드/녹화 관리
+│       └── report.py            # 피드백 레포트 생성
+└── requirements.txt
 ```
 
 ---
 
-## 2. HTTPS 터널 열기
+# Re:Action 서버 시작 가이드
 
-아이폰 Safari 등 외부 기기에서 접속하려면 HTTPS 주소가 필요합니다.  
-백엔드 서버를 실행한 상태에서 **새 터미널**을 열고 아래 명령어를 실행합니다.
+## 순서
 
+### 1. Docker DB 시작
 ```bash
-cloudflared tunnel --url http://localhost:8000
-```
-
-실행하면 아래와 같은 임시 HTTPS 주소가 출력됩니다.
-
-```text
-https://something-random.trycloudflare.com
-```
-
-> 이 주소는 `cloudflared tunnel`을 실행할 때마다 달라질 수 있습니다.
-
----
-
-## 3. 접속 주소
-
-Cloudflare Tunnel 주소가 아래와 같이 나왔다고 가정합니다.
-
-```text
-https://something-random.trycloudflare.com
-```
-
-아이폰 Safari에서는 아래 주소로 접속합니다.
-
-```text
-https://something-random.trycloudflare.com/mobile
-```
-
-PC에서는 아래 주소로 접속합니다.
-
-```text
-https://something-random.trycloudflare.com/pc
+docker start rehearsal-db
 ```
 
 ---
 
-## 4. 실행 요약
-
-터미널 1에서 백엔드 서버 실행:
-
+### 2. FastAPI 서버 (터미널 1)
 ```bash
-poetry run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+cd ~/Desktop/rehearsal-platform
+source venv/bin/activate
+uvicorn app.main:app --reload
 ```
+→ `http://127.0.0.1:8000/docs` 에서 camera-session 섹션 확인
 
-터미널 2에서 HTTPS 터널 실행:
-
-```bash
-cloudflared tunnel --url http://localhost:8000
-```
-
-출력된 `trycloudflare.com` 주소에 `/mobile` 또는 `/pc`를 붙여 접속합니다.
-
-예시:
-
-```text
-https://something-random.trycloudflare.com/mobile
-https://something-random.trycloudflare.com/pc
-```
 ---
 
-## 5. 자주 발생하는 문제
-
-### 포트 8000이 이미 사용 중인 경우
-
-다른 프로그램이 `8000` 포트를 사용 중일 수 있습니다.  
-이 경우 기존 서버를 종료하거나 다른 포트로 실행합니다.
-
+### 3. ngrok (터미널 2)
 ```bash
-poetry run uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+npx ngrok http 8000
+```
+→ 출력된 `https://xxxx.ngrok-free.dev` 주소 복사
+
+---
+
+### 4. index.html ngrok 주소 교체
+```bash
+cd ~/Desktop/rehearsal-platform
+grep -n "ngrok" reaction-pwa/index.html
 ```
 
-다른 포트를 사용했다면 Cloudflare Tunnel 명령어도 같은 포트로 맞춰야 합니다.
-
+주소가 바뀌었으면 교체:
 ```bash
-cloudflared tunnel --url http://localhost:8001
+# 기존 ngrok 주소를 새 주소로 교체 (xxxx 부분만 바꾸기)
+sed -i '' 's|https://기존주소.ngrok-free.dev|https://새주소.ngrok-free.dev|g' reaction-pwa/index.html
+sed -i '' 's|https://기존주소.ngrok-free.dev|https://새주소.ngrok-free.dev|g' reaction-pwa/camera.html
 ```
 
 ---
 
-## 6. 종료 방법
-
-서버 또는 터널을 종료하려면 실행 중인 터미널에서 아래 키를 누릅니다.
-
-```text
-Ctrl + C
+### 5. Netlify 재배포
+```bash
+cd ~/Desktop/rehearsal-platform/reaction-pwa
+npx netlify deploy --prod
 ```
+
+---
+
+## 최종 확인
+
+| 확인 항목 | 주소 |
+|-----------|------|
+| FastAPI docs | http://127.0.0.1:8000/docs |
+| ngrok 요청 로그 | http://127.0.0.1:4040 |
+| PWA (QR 페이지) | https://reaction-camera-connection.netlify.app |
+
+---
+
+## 주의사항
+
+- ngrok은 재시작할 때마다 **주소가 바뀜** → 4번 단계 반복 필요
+- DB가 없으면 서버 시작 실패 → 반드시 1번 먼저
+- 카메라는 **HTTPS에서만 동작** → Netlify 주소로 접속해야 함
+- 영상 업로드 확인: `ls ~/Desktop/rehearsal-platform/uploads/1/1/`
