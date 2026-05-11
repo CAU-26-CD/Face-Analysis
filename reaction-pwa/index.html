@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Re:Action — 카메라 연결</title>
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f5; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; padding: 24px;
+    }
+    .card {
+      background: #fff; border-radius: 16px; border: 1px solid #e8e8e8;
+      padding: 32px; width: 100%; max-width: 420px;
+    }
+    .logo { font-size: 13px; font-weight: 600; letter-spacing: 0.05em; color: #000; margin-bottom: 24px; }
+    h1 { font-size: 20px; font-weight: 600; color: #000; margin-bottom: 6px; }
+    .desc { font-size: 13px; color: #888; line-height: 1.6; margin-bottom: 24px; }
+    .qr-wrap {
+      background: #f9f9f9; border: 1px solid #eee; border-radius: 12px;
+      padding: 24px; display: flex; flex-direction: column;
+      align-items: center; gap: 16px; margin-bottom: 20px;
+      min-height: 220px; justify-content: center;
+    }
+    .code-label { font-size: 11px; color: #aaa; margin-bottom: 4px; }
+    .code-display { font-size: 22px; font-weight: 700; letter-spacing: 0.18em; color: #000; font-family: monospace; }
+    .expire { font-size: 11px; color: #bbb; }
+    .status-row {
+      display: flex; align-items: center; gap: 8px; padding: 12px 14px;
+      background: #f9f9f9; border-radius: 8px; border: 1px solid #eee; margin-bottom: 16px;
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #ccc; flex-shrink: 0; transition: background 0.3s; }
+    .status-dot.waiting { animation: pulse 1.5s ease-in-out infinite; }
+    .status-dot.connected { background: #2ea86b; animation: none; }
+    .status-dot.error { background: #e53; animation: none; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .status-text { font-size: 13px; color: #555; }
+    .btn-refresh {
+      width: 100%; padding: 11px; background: transparent;
+      border: 1px solid #ddd; border-radius: 8px; font-size: 13px; color: #555; cursor: pointer;
+    }
+    .btn-refresh:hover { background: #f5f5f5; }
+    .btn-refresh:disabled { opacity: 0.4; cursor: not-allowed; }
+    .skeleton {
+      width: 160px; height: 160px;
+      background: linear-gradient(90deg, #eee 25%, #f5f5f5 50%, #eee 75%);
+      background-size: 200% 100%; animation: shimmer 1.2s infinite; border-radius: 8px;
+    }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+    .connected-view { display: none; text-align: center; padding: 12px 0; }
+    .connected-view.show { display: block; }
+    .check-circle {
+      width: 48px; height: 48px; border-radius: 50%; background: #d4f1e4;
+      display: flex; align-items: center; justify-content: center; margin: 0 auto 12px;
+    }
+    .connected-title { font-size: 16px; font-weight: 600; color: #000; margin-bottom: 4px; }
+    .connected-sub { font-size: 13px; color: #888; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">Re:Action</div>
+    <h1>휴대폰 카메라 연결</h1>
+    <p class="desc">QR 코드를 스캔하면 카메라 앱이 자동으로 실행됩니다.</p>
+
+    <div class="qr-wrap" id="qrSection">
+      <div class="skeleton" id="qrSkeleton"></div>
+      <div style="text-align:center">
+        <div class="code-label">또는 직접 입력</div>
+        <div class="code-display" id="codeDisplay">— —</div>
+        <div class="expire" id="expireText">생성 중...</div>
+      </div>
+    </div>
+
+    <div class="status-row">
+      <div class="status-dot waiting" id="statusDot"></div>
+      <span class="status-text" id="statusText">연결 대기 중...</span>
+    </div>
+
+    <div class="connected-view" id="connectedView">
+      <div class="check-circle">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M4 10l4.5 4.5 7.5-8" stroke="#2ea86b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="connected-title">핸드폰이 연결됐어요!</div>
+      <div class="connected-sub">이제 핸드폰에서 촬영을 시작하세요.</div>
+    </div>
+
+    <button class="btn-refresh" id="refreshBtn" onclick="generateSession()">새 코드 생성</button>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script>
+    let sessionId = '';
+    let pollTimer = null;
+    let expireTimer = null;
+    let timeLeft = 300;
+
+    const PWA_BASE_URL = 'https://reaction-camera-connection.netlify.app/';
+
+    async function createSession() {
+      const res = await fetch(`https://pang-promptly-thus.ngrok-free.dev/api/v1/camera-session/create?pwa_base_url=${encodeURIComponent(PWA_BASE_URL)}`, {
+        method: 'POST'
+      });
+      if (!res.ok) throw new Error('세션 생성 실패');
+      return res.json();
+    }
+
+    async function fetchSessionStatus(sid) {
+      const res = await fetch(`https://pang-promptly-thus.ngrok-free.dev/api/v1/camera-session/${sid}/status`);
+      if (!res.ok) return null;
+      return res.json();
+    }
+
+    async function generateSession() {
+      clearInterval(pollTimer);
+      clearInterval(expireTimer);
+
+      document.getElementById('refreshBtn').disabled = true;
+      document.getElementById('connectedView').classList.remove('show');
+      document.getElementById('statusDot').className = 'status-dot waiting';
+      document.getElementById('statusText').textContent = '연결 대기 중...';
+      document.getElementById('codeDisplay').textContent = '— —';
+      document.getElementById('expireText').textContent = '생성 중...';
+      document.getElementById('qrSkeleton').style.display = 'block';
+      const qrEl = document.getElementById('qrcode');
+      if (qrEl) qrEl.innerHTML = '';
+
+      try {
+        const data = await createSession();
+        sessionId = data.session_id;
+        timeLeft = 300;
+
+        const code = data.code;
+        document.getElementById('codeDisplay').textContent = code.slice(0,2) + ' · ' + code.slice(2);
+        document.getElementById('qrSkeleton').style.display = 'none';
+
+        let qrContainer = document.getElementById('qrcode');
+        if (!qrContainer) {
+          qrContainer = document.createElement('div');
+          qrContainer.id = 'qrcode';
+          const section = document.getElementById('qrSection');
+          section.insertBefore(qrContainer, section.firstChild);
+        }
+        qrContainer.innerHTML = '';
+        new QRCode(qrContainer, {
+          text: data.camera_url,
+          width: 160, height: 160,
+          colorDark: '#000', colorLight: '#f9f9f9',
+          correctLevel: QRCode.CorrectLevel.M
+        });
+
+        expireTimer = setInterval(() => {
+          timeLeft--;
+          const m = Math.floor(timeLeft / 60);
+          const s = String(timeLeft % 60).padStart(2, '0');
+          document.getElementById('expireText').textContent = `${m}:${s} 후 만료`;
+          if (timeLeft <= 0) {
+            clearInterval(expireTimer);
+            clearInterval(pollTimer);
+            document.getElementById('expireText').textContent = '만료됨 — 새 코드를 생성하세요';
+          }
+        }, 1000);
+
+        pollTimer = setInterval(async () => {
+          const status = await fetchSessionStatus(sessionId);
+          if (!status) return;
+          if (status.status === 'connected' || status.status === 'done') {
+            clearInterval(pollTimer);
+            onConnected();
+          }
+          if (status.status === 'done' && status.video_url) {
+            onVideoReady(status.video_url);
+          }
+        }, 1000);
+
+      } catch (err) {
+        document.getElementById('statusDot').className = 'status-dot error';
+        document.getElementById('statusText').textContent = 'API 연결 실패 — 서버를 확인해주세요';
+        document.getElementById('qrSkeleton').style.display = 'none';
+        console.error(err);
+      } finally {
+        document.getElementById('refreshBtn').disabled = false;
+      }
+    }
+
+    function onConnected() {
+      document.getElementById('statusDot').className = 'status-dot connected';
+      document.getElementById('statusText').textContent = '연결됨 — 핸드폰에서 촬영을 시작하세요';
+      document.getElementById('connectedView').classList.add('show');
+    }
+
+    function onVideoReady(videoUrl) {
+      console.log('영상 수신 완료:', videoUrl);
+      document.getElementById('statusText').textContent = '영상 수신 완료 — 배우 매핑을 시작하세요';
+    }
+
+    generateSession();
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>

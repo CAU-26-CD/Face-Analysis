@@ -1,48 +1,54 @@
-# # from fastapi import FastAPI
+import os
 
-
-# # app = FastAPI()
-
-
-# # @app.get("/")
-# # def read_root():
-# #     return {"message": "Hello FastAPI"}
-
-
-# # ----
-
-# from fastapi import FastAPI
-# from app.database import Base, engine
-# from app.models import User
-
-# Base.metadata.create_all(bind=engine)
-
-# app = FastAPI()
-
-# @app.get("/")
-# def read_root():
-#     return {"message": "Hello FastAPI"}
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.database import Base, engine
-from app.routers import feedbacks, sessions, users, pages, videos
+from app.core.database import engine, Base
+from app.api.v1.endpoints import auth, projects, sessions, feedbacks, actors, video, report
+from app.api.v1.endpoints import camera_session          # ← 추가
+
 from fastapi.staticfiles import StaticFiles
 
-Base.metadata.create_all(bind=engine)
+app = FastAPI(
+    title="Rehearsal Feedback Platform API",
+    version="0.1.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
 
-app = FastAPI(title="Rehearsal Feedback API")
+# ─── CORS ────────────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+# ─── Routers ─────────────────────────────────────────────
+API_PREFIX = "/api/v1"
 
-app.include_router(users.router)
-app.include_router(sessions.router)
-app.include_router(feedbacks.router)
+app.include_router(auth.router,           prefix=API_PREFIX)
+app.include_router(projects.router,       prefix=API_PREFIX)
+app.include_router(sessions.router,       prefix=API_PREFIX)
+app.include_router(feedbacks.router,      prefix=API_PREFIX)
+app.include_router(actors.router,         prefix=API_PREFIX)
+app.include_router(video.router,          prefix=API_PREFIX)
+app.include_router(report.router,         prefix=API_PREFIX)
+app.include_router(camera_session.router, prefix=API_PREFIX)  # ← 추가
 
-## html페이지 띄워주는 라우터
-app.include_router(pages.router)
-app.include_router(videos.router)
+
+# ─── DB 초기화 (개발용 — 운영은 alembic 마이그레이션 사용) ──
+@app.on_event("startup")
+async def on_startup():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
-@app.get("/")
-def read_root():
-    return {"message": "Hello FastAPI"}
+@app.get("/health") 
+def health():
+    return {"status": "ok"}
+
+
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
