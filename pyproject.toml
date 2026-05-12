@@ -1,48 +1,25 @@
 [tool.poetry]
-name = "rehearsal-platform"
+name = "face-analyzer"
 version = "0.1.0"
-description = "Rehearsal Feedback Platform API"
+description = "Standalone FastAPI service for S3 video face analysis callbacks"
 authors = ["ziwon <nayanako03@gmail.com>"]
 readme = "README.md"
-requires-python = ">=3.14"
-dependencies = [
-    "fastapi (>=0.135.2,<0.136.0)",
-    "uvicorn[standard] (>=0.42.0,<0.43.0)",
-    "sqlalchemy (>=2.0.48,<3.0.0)",
-    "jinja2 (>=3.1.6,<4.0.0)",
-    "python-multipart (>=0.0.22,<0.0.23)",
-    "opencv-python (>=4.12.0.88,<5.0.0.0)",
-    "insightface (>=0.7.3,<0.8.0)",
-    "onnxruntime (>=1.25.1,<2.0.0)"
-]
 package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
-fastapi = "^0.111.0"
-uvicorn = {extras = ["standard"], version = "^0.30.0"}
-sqlalchemy = "^2.0.30"
-alembic = "^1.13.1"
-asyncpg = "^0.29.0"
-psycopg2-binary = "^2.9.9"
-pydantic = "^2.7.1"
-pydantic-settings = "^2.3.0"
-python-jose = {extras = ["cryptography"], version = "^3.3.0"}
-passlib = {extras = ["bcrypt"], version = "^1.7.4"}
-python-multipart = "^0.0.9"
-aiofiles = "^23.2.1"
-httpx = "^0.27.0"
-python-dotenv = "^1.0.1"
-greenlet = "^3.5.0"
-bcrypt = "4.0.1"
+fastapi = ">=0.135.2,<0.136.0"
+uvicorn = { extras = ["standard"], version = ">=0.42.0,<0.43.0" }
+pydantic = ">=2.12.5,<3.0.0"
+httpx = ">=0.27.0,<1.0.0"
+boto3 = ">=1.34.0,<2.0.0"
 opencv-python = "^4.13.0.92"
 insightface = "^0.7.3"
-onnxruntime = "1.21.0"
+onnxruntime = ">=1.25.1,<2.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 pytest-asyncio = "^0.23.0"
-httpx = "^0.27.0"
 
 [build-system]
 requires = ["poetry-core"]

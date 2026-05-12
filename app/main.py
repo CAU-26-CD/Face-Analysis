@@ -1,54 +1,46 @@
-import os
+from fastapi import BackgroundTasks, FastAPI, status
+from pydantic import BaseModel, Field, HttpUrl
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from app.services.face_analysis.worker import run_analysis_job
 
-from app.core.database import engine, Base
-from app.api.v1.endpoints import auth, projects, sessions, feedbacks, actors, video, report
-from app.api.v1.endpoints import camera_session          # ← 추가
 
-from fastapi.staticfiles import StaticFiles
+class AnalyzeRequest(BaseModel):
+    video_id: int = Field(..., ge=1)
+    session_id: int = Field(..., ge=1)
+    s3_key: str = Field(..., min_length=1)
+    s3_url: HttpUrl
+    callback_url: HttpUrl
+
+
+class AnalyzeAcceptedResponse(BaseModel):
+    video_id: int
+    analysis_status: str
+
 
 app = FastAPI(
-    title="Rehearsal Feedback Platform API",
+    title="Face Analyzer API",
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
-# ─── CORS ────────────────────────────────────────────────
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-# ─── Routers ─────────────────────────────────────────────
-API_PREFIX = "/api/v1"
-
-app.include_router(auth.router,           prefix=API_PREFIX)
-app.include_router(projects.router,       prefix=API_PREFIX)
-app.include_router(sessions.router,       prefix=API_PREFIX)
-app.include_router(feedbacks.router,      prefix=API_PREFIX)
-app.include_router(actors.router,         prefix=API_PREFIX)
-app.include_router(video.router,          prefix=API_PREFIX)
-app.include_router(report.router,         prefix=API_PREFIX)
-app.include_router(camera_session.router, prefix=API_PREFIX)  # ← 추가
-
-
-# ─── DB 초기화 (개발용 — 운영은 alembic 마이그레이션 사용) ──
-@app.on_event("startup")
-async def on_startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
-@app.get("/health") 
-def health():
+@app.get("/health")
+def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-os.makedirs("uploads", exist_ok=True)
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+@app.post(
+    "/analyze",
+    response_model=AnalyzeAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def analyze(
+    request: AnalyzeRequest,
+    background_tasks: BackgroundTasks,
+) -> AnalyzeAcceptedResponse:
+    background_tasks.add_task(run_analysis_job, request.model_dump(mode="json"))
+    return AnalyzeAcceptedResponse(
+        video_id=request.video_id,
+        analysis_status="accepted",
+    )

@@ -1,121 +1,120 @@
-# Rehearsal Feedback Platform — Backend
+# Face Analyzer
 
-**POST** http://127.0.0.1:8000/api/v1/camera-session/create?pwa_base_url=https://reaction-camera-connection.netlify.app
--> QR 생성해서 세션과 카메라 url 매핑해주는 api
+Standalone FastAPI service for analyzing faces in videos stored on S3.
 
-**GET** http://127.0.0.1:8000/api/v1/camera-session/Iddtrs2Zmrc7V0tO/status
--> 촬영중인지 아닌지 판단하는 api -> status 반환 하며, 노트북 화면에 "연결됨/아님" 여부 띄워주는 api
+This repository does not connect to the BE database. The BE server owns upload,
+video metadata, `analysis_status`, and persistence. This analyzer only receives
+an S3 video reference, runs OpenCV / insightFace / onnxruntime analysis, and
+POSTs the result back to the BE callback URL.
 
-**POST** http://127.0.0.1:8000/api/v1/camera-session/fNzHb3BDQjFJ1RAD/done
--> 영상 촬영 마무리되면 status done으로 바꿔주는 api
+## API
 
-## MAIN LOGIC
+### POST `/analyze`
 
-핸드폰 촬영 종료
-    ↓
-video/upload 로 영상 서버에 저장
-    ↓
-저장 완료되면 camera-session/{id}/done 자동 호출  ← 이거
-    ↓
-노트북 status 폴링에서 "done" 감지
-    ↓
-노트북 화면이 매핑 화면으로 전환
+Starts a background analysis job and returns immediately.
 
----
+Request:
 
-## 📁 프로젝트 구조
-
-```
-rehearsal-platform/
-├── app/
-│   ├── main.py                  # FastAPI 앱 진입점
-│   ├── core/
-│   │   ├── config.py            # 환경변수 설정
-│   │   ├── database.py          # SQLAlchemy async 엔진
-│   │   ├── security.py          # JWT / 비밀번호 해싱
-│   │   └── deps.py              # 공통 Depends (현재 유저 등)
-│   ├── models/
-│   │   └── models.py            # ORM 모델 (ERD 기반)
-│   ├── schemas/
-│   │   └── schemas.py           # Pydantic Request/Response
-│   └── api/v1/endpoints/
-│       ├── auth.py              # 회원가입 / 로그인
-│       ├── projects.py          # 프로젝트 CRUD + 조인
-│       ├── sessions.py          # 세션 CRUD
-│       ├── actors.py            # 배우 태그 관리
-│       ├── feedbacks.py         # 피드백 작성/조회/삭제
-│       ├── video.py             # 영상 업로드/녹화 관리
-│       └── report.py            # 피드백 레포트 생성
-└── requirements.txt
+```json
+{
+  "video_id": 1,
+  "session_id": 7,
+  "s3_key": "videos/7/abc123.webm",
+  "s3_url": "https://bucket.s3.ap-northeast-2.amazonaws.com/videos/7/abc123.webm",
+  "callback_url": "https://BE_SERVER/api/v1/videos/analysis-callback"
+}
 ```
 
----
+Immediate response:
 
-# Re:Action 서버 시작 가이드
+```json
+{
+  "video_id": 1,
+  "analysis_status": "accepted"
+}
+```
 
-## 순서
+Success callback:
 
-### 1. Docker DB 시작
+```json
+{
+  "video_id": 1,
+  "analysis_status": "done",
+  "analysis_result": {
+    "video_path": "...",
+    "appearances": [
+      {
+        "person_id": "person_1",
+        "start_seconds": 15.0,
+        "end_seconds": 20.0,
+        "detection_count": 3
+      }
+    ]
+  }
+}
+```
+
+Failure callback:
+
+```json
+{
+  "video_id": 1,
+  "analysis_status": "failed",
+  "error_message": "..."
+}
+```
+
+Every callback includes:
+
+```http
+X-Analyzer-Secret: {ANALYZER_SECRET}
+```
+
+## Environment
+
 ```bash
-docker start rehearsal-db
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+AWS_REGION=ap-northeast-2
+S3_BUCKET_NAME=your-video-bucket
+ANALYZER_SECRET=change-me
 ```
 
----
+`CALLBACK_SECRET` is also accepted as a fallback for `ANALYZER_SECRET`.
 
-### 2. FastAPI 서버 (터미널 1)
+If `S3_BUCKET_NAME` is set, the analyzer downloads with boto3 using `s3_key`.
+If it is not set, it falls back to downloading `s3_url` directly.
+
+## Run Locally
+
 ```bash
-cd ~/Desktop/rehearsal-platform
-source venv/bin/activate
-uvicorn app.main:app --reload
+poetry install
+poetry run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-→ `http://127.0.0.1:8000/docs` 에서 camera-session 섹션 확인
 
----
+Or with pip:
 
-### 3. ngrok (터미널 2)
 ```bash
-npx ngrok http 8000
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-→ 출력된 `https://xxxx.ngrok-free.dev` 주소 복사
 
----
+Docs: `http://127.0.0.1:8000/docs`
 
-### 4. index.html ngrok 주소 교체
+## Docker
+
 ```bash
-cd ~/Desktop/rehearsal-platform
-grep -n "ngrok" reaction-pwa/index.html
+docker build -t face-analyzer .
+docker run --rm -p 8000:8000 --env-file .env face-analyzer
 ```
 
-주소가 바뀌었으면 교체:
-```bash
-# 기존 ngrok 주소를 새 주소로 교체 (xxxx 부분만 바꾸기)
-sed -i '' 's|https://기존주소.ngrok-free.dev|https://새주소.ngrok-free.dev|g' reaction-pwa/index.html
-sed -i '' 's|https://기존주소.ngrok-free.dev|https://새주소.ngrok-free.dev|g' reaction-pwa/camera.html
-```
+## BE Contract
 
----
+The BE server should:
 
-### 5. Netlify 재배포
-```bash
-cd ~/Desktop/rehearsal-platform/reaction-pwa
-npx netlify deploy --prod
-```
-
----
-
-## 최종 확인
-
-| 확인 항목 | 주소 |
-|-----------|------|
-| FastAPI docs | http://127.0.0.1:8000/docs |
-| ngrok 요청 로그 | http://127.0.0.1:4040 |
-| PWA (QR 페이지) | https://reaction-camera-connection.netlify.app |
-
----
-
-## 주의사항
-
-- ngrok은 재시작할 때마다 **주소가 바뀜** → 4번 단계 반복 필요
-- DB가 없으면 서버 시작 실패 → 반드시 1번 먼저
-- 카메라는 **HTTPS에서만 동작** → Netlify 주소로 접속해야 함
-- 영상 업로드 확인: `ls ~/Desktop/rehearsal-platform/uploads/1/1/`
+1. Upload the video to S3 and store `s3_key` / `s3_url`.
+2. Call analyzer `POST /analyze`.
+3. Receive the callback and validate `X-Analyzer-Secret`.
+4. Update `videos.analysis_status` and `videos.analysis_result`.
