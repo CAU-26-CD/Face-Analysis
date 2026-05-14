@@ -4,12 +4,18 @@ from pydantic import BaseModel, Field, HttpUrl
 from app.services.face_analysis.worker import run_analysis_job
 
 
+class KnownActorPayload(BaseModel):
+    actor_id: str = Field(..., min_length=1)
+    face_template: list[float] = Field(..., min_length=1)
+
+
 class AnalyzeRequest(BaseModel):
     video_id: int = Field(..., ge=1)
     session_id: int = Field(..., ge=1)
     s3_key: str = Field(..., min_length=1)
     s3_url: HttpUrl
     callback_url: HttpUrl
+    known_actors: list[KnownActorPayload] = Field(default_factory=list)
 
 
 class AnalyzeAcceptedResponse(BaseModel):

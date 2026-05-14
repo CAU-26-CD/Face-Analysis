@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from app.services.face_analysis.models import ClusteredFaceDetection, FaceAppearance
+from app.services.face_analysis.models import FaceAppearance
 
 
 @dataclass
@@ -20,30 +20,28 @@ class AppearanceTimelineBuilder:
         self._open_appearances: dict[str, _OpenAppearance] = {}
         self._closed_appearances: list[FaceAppearance] = []
 
-    def add(self, clustered_detection: ClusteredFaceDetection) -> None:
-        person_id = clustered_detection.person_id
-        timestamp = clustered_detection.detection.timestamp_seconds
+    def add(self, person_id: str, timestamp_seconds: float) -> None:
         current = self._open_appearances.get(person_id)
 
         if current is None:
             self._open_appearances[person_id] = _OpenAppearance(
                 person_id=person_id,
-                start_seconds=timestamp,
-                end_seconds=timestamp,
+                start_seconds=timestamp_seconds,
+                end_seconds=timestamp_seconds,
                 detection_count=1,
             )
             return
 
-        if timestamp - current.end_seconds <= self.max_gap_seconds:
-            current.end_seconds = timestamp
+        if timestamp_seconds - current.end_seconds <= self.max_gap_seconds:
+            current.end_seconds = timestamp_seconds
             current.detection_count += 1
             return
 
         self._closed_appearances.append(_to_face_appearance(current))
         self._open_appearances[person_id] = _OpenAppearance(
             person_id=person_id,
-            start_seconds=timestamp,
-            end_seconds=timestamp,
+            start_seconds=timestamp_seconds,
+            end_seconds=timestamp_seconds,
             detection_count=1,
         )
 

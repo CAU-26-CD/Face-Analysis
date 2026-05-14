@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -19,9 +19,65 @@ class FaceDetection:
 
 
 @dataclass(frozen=True)
-class ClusteredFaceDetection:
-    person_id: str
+class TrackedDetection:
+    track_id: str
     detection: FaceDetection
+
+
+@dataclass(frozen=True)
+class Tracklet:
+    track_id: str
+    detections: list[FaceDetection]
+    aggregated_embedding: list[float]
+    start_seconds: float
+    end_seconds: float
+
+    @property
+    def detection_count(self) -> int:
+        return len(self.detections)
+
+
+@dataclass(frozen=True)
+class WithinVideoCluster:
+    cluster_id: str
+    tracklets: list[Tracklet]
+    aggregated_embedding: list[float]
+    start_seconds: float
+    end_seconds: float
+
+    @property
+    def detection_count(self) -> int:
+        return sum(tracklet.detection_count for tracklet in self.tracklets)
+
+
+@dataclass(frozen=True)
+class KnownActor:
+    actor_id: str
+    face_template: list[float]
+
+
+@dataclass(frozen=True)
+class MatchedActor:
+    cluster_id: str
+    actor_id: str
+    similarity: float
+
+
+@dataclass(frozen=True)
+class NewActorCandidate:
+    cluster_id: str
+    embedding: list[float]
+    detection_count: int
+    start_seconds: float
+    end_seconds: float
+    suggested_actor_id: str | None = None
+    suggested_similarity: float | None = None
+
+
+@dataclass(frozen=True)
+class MatchResult:
+    matched: list[MatchedActor]
+    new_candidates: list[NewActorCandidate]
 
 
 @dataclass(frozen=True)
@@ -36,3 +92,4 @@ class FaceAppearance:
 class FaceAnalysisResult:
     video_path: str
     appearances: list[FaceAppearance]
+    new_candidates: list[NewActorCandidate] = field(default_factory=list)

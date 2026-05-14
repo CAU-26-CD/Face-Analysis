@@ -5,7 +5,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.services.face_analysis.analyzer import FaceVideoAnalyzer
-from app.services.face_analysis.clustering import FaceClusterer
+from app.services.face_analysis.tracker import FaceTracker
+from app.services.face_analysis.tracklet_clusterer import TrackletClusterer
 from app.services.face_analysis.video_reader import VideoFrameReader
 
 
@@ -20,25 +21,33 @@ def main() -> None:
 
     analyzer = FaceVideoAnalyzer(
         frame_reader=VideoFrameReader(frame_interval_seconds=5.0),
-        clusterer=FaceClusterer(similarity_threshold=0.45),
+        tracker=FaceTracker(similarity_threshold=0.50),
+        tracklet_clusterer=TrackletClusterer(similarity_threshold=0.40),
     )
 
-    clustered_count = 0
-    for clustered_detection in analyzer.cluster_faces(video_path):
-        detection = clustered_detection.detection
+    tracker = FaceTracker(similarity_threshold=0.50)
+    for video_frame in analyzer.read_sampled_frames(video_path):
+        detections = analyzer.detector.detect(video_frame)
+        tracked = tracker.update(video_frame, detections)
+        for item in tracked:
+            print(
+                item.detection.timestamp_seconds,
+                item.track_id,
+                f"{item.detection.confidence:.3f}",
+                item.detection.bbox,
+            )
+
+    tracklets = tracker.finalize()
+    clusters = analyzer.tracklet_clusterer.cluster(tracklets)
+
+    print()
+    print(f"tracklets={len(tracklets)} within_video_clusters={len(clusters)}")
+    for cluster in clusters:
         print(
-            detection.timestamp_seconds,
-            clustered_detection.person_id,
-            detection.confidence,
-            detection.bbox,
+            cluster.cluster_id,
+            f"detections={cluster.detection_count}",
+            f"span=({cluster.start_seconds:.1f}s, {cluster.end_seconds:.1f}s)",
         )
-
-        clustered_count += 1
-        if clustered_count >= 20:
-            break
-
-    print("clusters", analyzer.clusterer.get_cluster_count())
-    print("clustered_detections", clustered_count)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.services.face_analysis.analyzer import FaceVideoAnalyzer
+from app.services.face_analysis.models import KnownActor
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ def run_analysis_job(request: dict) -> None:
 
 def _analyze_video(request: dict) -> dict:
     video_id = int(request["video_id"])
+    known_actors = _parse_known_actors(request.get("known_actors", []))
 
     with tempfile.TemporaryDirectory(prefix="face-analyzer-") as temp_dir:
         video_path = _download_video(
@@ -40,7 +42,10 @@ def _analyze_video(request: dict) -> dict:
             s3_url=str(request["s3_url"]),
             destination_dir=Path(temp_dir),
         )
-        analysis = FaceVideoAnalyzer().analyze(video_path)
+        analysis = FaceVideoAnalyzer().analyze(
+            video_path,
+            known_actors=known_actors,
+        )
 
         return {
             "video_id": video_id,
@@ -51,8 +56,22 @@ def _analyze_video(request: dict) -> dict:
                     asdict(appearance)
                     for appearance in analysis.appearances
                 ],
+                "new_candidates": [
+                    asdict(candidate)
+                    for candidate in analysis.new_candidates
+                ],
             },
         }
+
+
+def _parse_known_actors(raw_actors: list[dict]) -> list[KnownActor]:
+    return [
+        KnownActor(
+            actor_id=str(actor["actor_id"]),
+            face_template=[float(value) for value in actor["face_template"]],
+        )
+        for actor in raw_actors
+    ]
 
 
 def _download_video(s3_key: str, s3_url: str, destination_dir: Path) -> Path:

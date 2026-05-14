@@ -7,9 +7,11 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.services.face_analysis.actor_matcher import ActorMatcher
 from app.services.face_analysis.analyzer import FaceVideoAnalyzer
-from app.services.face_analysis.clustering import FaceClusterer
 from app.services.face_analysis.timeline import AppearanceTimelineBuilder
+from app.services.face_analysis.tracker import FaceTracker
+from app.services.face_analysis.tracklet_clusterer import TrackletClusterer
 from app.services.face_analysis.video_reader import VideoFrameReader
 
 
@@ -22,7 +24,12 @@ def main() -> None:
 
     analyzer = FaceVideoAnalyzer(
         frame_reader=VideoFrameReader(frame_interval_seconds=args.frame_interval),
-        clusterer=FaceClusterer(similarity_threshold=args.similarity_threshold),
+        tracker=FaceTracker(similarity_threshold=args.track_threshold),
+        tracklet_clusterer=TrackletClusterer(similarity_threshold=args.cluster_threshold),
+        actor_matcher=ActorMatcher(
+            match_threshold=args.match_threshold,
+            suggest_threshold=args.suggest_threshold,
+        ),
         timeline_builder=AppearanceTimelineBuilder(max_gap_seconds=args.max_gap),
     )
 
@@ -63,10 +70,28 @@ def parse_args() -> argparse.Namespace:
         help="Seconds between sampled frames. Lower is slower and more precise.",
     )
     parser.add_argument(
-        "--similarity-threshold",
+        "--track-threshold",
         type=float,
-        default=0.45,
-        help="Cosine similarity threshold for assigning a face to an existing person.",
+        default=0.50,
+        help="Cosine similarity threshold for the per-frame tracker.",
+    )
+    parser.add_argument(
+        "--cluster-threshold",
+        type=float,
+        default=0.40,
+        help="Cosine similarity threshold for merging tracklets within a video.",
+    )
+    parser.add_argument(
+        "--match-threshold",
+        type=float,
+        default=0.50,
+        help="Cosine similarity threshold for matching a within-video cluster to a known actor.",
+    )
+    parser.add_argument(
+        "--suggest-threshold",
+        type=float,
+        default=0.40,
+        help="Cosine similarity threshold for surfacing a suggested known-actor match.",
     )
     parser.add_argument(
         "--max-gap",
