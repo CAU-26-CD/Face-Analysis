@@ -9,6 +9,7 @@ class _PendingCluster:
     cluster_id: str
     tracklets: list[PersonTracklet] = field(default_factory=list)
     aggregated_embedding: list[float] = field(default_factory=list)
+    exemplar_embeddings: list[list[float]] = field(default_factory=list)
     face_count: int = 0
     start_seconds: float = 0.0
     end_seconds: float = 0.0
@@ -19,6 +20,7 @@ class _PendingCluster:
             cluster_id=cluster_id,
             tracklets=[tracklet],
             aggregated_embedding=list(tracklet.aggregated_embedding),
+            exemplar_embeddings=[list(e) for e in tracklet.exemplar_embeddings],
             face_count=tracklet.face_count,
             start_seconds=tracklet.start_seconds,
             end_seconds=tracklet.end_seconds,
@@ -28,11 +30,14 @@ class _PendingCluster:
         current_count = self.face_count
         incoming_count = tracklet.face_count
         total = current_count + incoming_count
-        if total > 0:
+        if total > 0 and self.aggregated_embedding and tracklet.aggregated_embedding:
             self.aggregated_embedding = [
                 ((value * current_count) + (new_value * incoming_count)) / total
                 for value, new_value in zip(self.aggregated_embedding, tracklet.aggregated_embedding)
             ]
+        elif tracklet.aggregated_embedding and not self.aggregated_embedding:
+            self.aggregated_embedding = list(tracklet.aggregated_embedding)
+        self.exemplar_embeddings.extend(list(e) for e in tracklet.exemplar_embeddings)
         self.tracklets.append(tracklet)
         self.face_count = total
         self.start_seconds = min(self.start_seconds, tracklet.start_seconds)
@@ -43,6 +48,7 @@ class _PendingCluster:
             cluster_id=self.cluster_id,
             tracklets=list(self.tracklets),
             aggregated_embedding=list(self.aggregated_embedding),
+            exemplar_embeddings=[list(e) for e in self.exemplar_embeddings],
             start_seconds=self.start_seconds,
             end_seconds=self.end_seconds,
         )
@@ -51,14 +57,14 @@ class _PendingCluster:
 class TrackletClusterer:
     """Merges person tracklets that belong to the same identity inside one video.
 
-    ByteTrack already keeps a stable track_id while the person bbox is visible,
-    but a person who leaves the frame longer than ``track_buffer`` gets a new
-    track_id. This stage compares per-track face embeddings to stitch those
-    back into a single within-video identity.
+    ByteTrack keeps a stable track_id while the person bbox is visible, but a
+    person who leaves the frame longer than ``track_buffer`` gets a new
+    track_id. This stage stitches those back together by comparing tracklets'
+    *exemplar sets* using **max** cosine similarity — so a tracklet whose
+    centroid is profile-heavy can still merge with a cluster whose centroid
+    is frontal, as long as at least one exemplar pair matches well.
 
-    Tracklets with no face_count (the person was tracked but their face was
-    never recognized — e.g. they stayed turned away) cannot be matched to any
-    known actor and are dropped here.
+    Tracklets that never observed a face (no identity available) are dropped.
     """
 
     def __init__(self, similarity_threshold: float = 0.40):
@@ -76,9 +82,9 @@ class TrackletClusterer:
             best_cluster = None
             best_similarity = -1.0
             for cluster in pending:
-                similarity = cosine_similarity(
-                    tracklet.aggregated_embedding,
-                    cluster.aggregated_embedding,
+                similarity = _max_pair_similarity(
+                    tracklet.exemplar_embeddings,
+                    cluster.exemplar_embeddings,
                 )
                 if similarity > best_similarity:
                     best_similarity = similarity
@@ -95,3 +101,17 @@ class TrackletClusterer:
                 best_cluster.add(tracklet)
 
         return [cluster.finalize() for cluster in pending]
+
+
+def _max_pair_similarity(
+    left: list[list[float]], right: list[list[float]]
+) -> float:
+    if not left or not right:
+        return -1.0
+    best = -1.0
+    for a in left:
+        for b in right:
+            similarity = cosine_similarity(a, b)
+            if similarity > best:
+                best = similarity
+    return best

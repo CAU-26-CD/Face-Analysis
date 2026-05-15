@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.services.face_analysis.actor_matcher import ActorMatcher
 from app.services.face_analysis.detector import InsightFaceDetector
+from app.services.face_analysis.exemplars import select_top_k_diverse
 from app.services.face_analysis.face_person_associator import FacePersonAssociator
 from app.services.face_analysis.models import (
     FaceAnalysisResult,
@@ -59,7 +60,10 @@ class FaceVideoAnalyzer:
         actor_matcher: ActorMatcher | None = None,
         timeline_builder: AppearanceTimelineBuilder | None = None,
         thumbnail_extractor: ClusterThumbnailExtractor | None = None,
+        exemplars_per_tracklet: int = 5,
     ):
+        if exemplars_per_tracklet < 1:
+            raise ValueError("exemplars_per_tracklet must be >= 1")
         self.frame_reader = frame_reader or VideoFrameReader()
         self.person_detector = person_detector or PersonDetector()
         self.person_tracker = person_tracker or PersonTracker()
@@ -69,6 +73,7 @@ class FaceVideoAnalyzer:
         self.actor_matcher = actor_matcher or ActorMatcher()
         self.timeline_builder = timeline_builder or AppearanceTimelineBuilder()
         self.thumbnail_extractor = thumbnail_extractor or ClusterThumbnailExtractor()
+        self.exemplars_per_tracklet = exemplars_per_tracklet
 
     def read_sampled_frames(self, video_path: str | Path) -> Iterator[VideoFrame]:
         return self.frame_reader.read_frames(video_path)
@@ -150,8 +155,8 @@ class FaceVideoAnalyzer:
                 continue
             buffer.face_detections.append(tracked.detection)
 
-    @staticmethod
     def _finalize_tracklets(
+        self,
         track_buffers: dict[str, _TrackBuffer],
     ) -> list[PersonTracklet]:
         tracklets: list[PersonTracklet] = []
@@ -161,12 +166,19 @@ class FaceVideoAnalyzer:
             aggregated = _mean_embedding(
                 [face.embedding for face in buffer.face_detections]
             )
+            exemplars = [
+                list(detection.embedding)
+                for detection in select_top_k_diverse(
+                    buffer.face_detections, self.exemplars_per_tracklet
+                )
+            ]
             tracklets.append(
                 PersonTracklet(
                     track_id=buffer.track_id,
                     person_detections=list(buffer.person_detections),
                     face_detections=list(buffer.face_detections),
                     aggregated_embedding=aggregated,
+                    exemplar_embeddings=exemplars,
                     start_seconds=buffer.person_detections[0].timestamp_seconds,
                     end_seconds=buffer.person_detections[-1].timestamp_seconds,
                 )

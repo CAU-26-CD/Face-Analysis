@@ -53,6 +53,7 @@ def _tracklet(
         person_detections=person_detections,
         face_detections=face_detections,
         aggregated_embedding=embedding,
+        exemplar_embeddings=[embedding],
         start_seconds=start,
         end_seconds=end,
     )
@@ -91,6 +92,7 @@ def test_tracklets_without_face_identity_are_dropped():
         person_detections=[_person_detection(6.0), _person_detection(8.0)],
         face_detections=[],
         aggregated_embedding=[],
+        exemplar_embeddings=[],
         start_seconds=6.0,
         end_seconds=8.0,
     )
@@ -114,3 +116,36 @@ def test_cluster_detection_count_sums_person_observations():
 def test_empty_input_returns_empty_clusters():
     clusterer = TrackletClusterer()
     assert clusterer.cluster([]) == []
+
+
+def test_max_exemplar_similarity_merges_profile_and_frontal_tracklets():
+    """Reproduces the over-split case from real videos: a profile-only
+    tracklet's centroid is far from a frontal tracklet's centroid, but each
+    tracklet retains a high-quality exemplar that matches the other strongly.
+    Multi-exemplar (max-pair) similarity should merge them."""
+    frontal_embedding = [1.0, 0.0, 0.0]
+    profile_embedding = [0.2, 0.98, 0.0]
+
+    frontal_tracklet = PersonTracklet(
+        track_id="frontal",
+        person_detections=[_person_detection(0.0)],
+        face_detections=[_face_detection(0.0, frontal_embedding)],
+        aggregated_embedding=frontal_embedding,
+        exemplar_embeddings=[frontal_embedding, profile_embedding],
+        start_seconds=0.0,
+        end_seconds=5.0,
+    )
+    profile_tracklet = PersonTracklet(
+        track_id="profile",
+        person_detections=[_person_detection(10.0)],
+        face_detections=[_face_detection(10.0, profile_embedding)],
+        aggregated_embedding=profile_embedding,
+        exemplar_embeddings=[profile_embedding, frontal_embedding],
+        start_seconds=10.0,
+        end_seconds=15.0,
+    )
+
+    clusterer = TrackletClusterer(similarity_threshold=0.6)
+    clusters = clusterer.cluster([frontal_tracklet, profile_tracklet])
+
+    assert len(clusters) == 1, "profile + frontal exemplars should bridge the merge"

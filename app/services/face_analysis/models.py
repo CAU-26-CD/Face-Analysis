@@ -45,12 +45,18 @@ class PersonTracklet:
     ``person_detections`` is when the person bbox was on screen.
     ``face_detections`` is the subset of frames where a face inside that bbox
     was also recognized — this is what gives the track its identity.
+    ``aggregated_embedding`` is the mean of all face embeddings (used as the
+    ``embedding`` we send back to BE for new candidates). ``exemplar_embeddings``
+    is a small set of high-quality face embeddings spanning the tracklet's
+    timeline — used for identity matching, where comparing by *max* similarity
+    over exemplars is far more robust to profile/frontal mixes than centroid.
     """
 
     track_id: str
     person_detections: list[PersonDetection]
     face_detections: list[FaceDetection]
     aggregated_embedding: list[float]
+    exemplar_embeddings: list[list[float]]
     start_seconds: float
     end_seconds: float
 
@@ -64,7 +70,7 @@ class PersonTracklet:
 
     @property
     def has_identity(self) -> bool:
-        return bool(self.face_detections) and bool(self.aggregated_embedding)
+        return bool(self.exemplar_embeddings) or bool(self.aggregated_embedding)
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,7 @@ class WithinVideoCluster:
     cluster_id: str
     tracklets: list[PersonTracklet]
     aggregated_embedding: list[float]
+    exemplar_embeddings: list[list[float]]
     start_seconds: float
     end_seconds: float
 
