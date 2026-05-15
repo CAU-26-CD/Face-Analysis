@@ -60,9 +60,18 @@ class TrackletClusterer:
     ByteTrack keeps a stable track_id while the person bbox is visible, but a
     person who leaves the frame longer than ``track_buffer`` gets a new
     track_id. This stage stitches those back together by comparing tracklets'
-    *exemplar sets* using **max** cosine similarity — so a tracklet whose
-    centroid is profile-heavy can still merge with a cluster whose centroid
-    is frontal, as long as at least one exemplar pair matches well.
+    *exemplar sets* using the **median** of all cross-pair cosine similarities.
+
+    Why median, not max or mean:
+      - Max merges on a single outlier pair. Different people occasionally
+        produce one high-similarity pair (profile/lighting/mask coincidence),
+        which Phase 5 saw as cross-identity over-merges in real videos.
+      - Mean is brittle when one tracklet has highly self-similar exemplars
+        (same person should!) — a single outlier pair gets multiplied across
+        all paired exemplars from the other set and skews the average.
+      - Median requires the *majority* of cross-pair similarities to be high.
+        Same-person sets produce many high pairs; different-person sets
+        produce a few outliers at most, which the median ignores.
 
     Tracklets that never observed a face (no identity available) are dropped.
     """
@@ -82,7 +91,7 @@ class TrackletClusterer:
             best_cluster = None
             best_similarity = -1.0
             for cluster in pending:
-                similarity = _max_pair_similarity(
+                similarity = _median_pair_similarity(
                     tracklet.exemplar_embeddings,
                     cluster.exemplar_embeddings,
                 )
@@ -103,15 +112,18 @@ class TrackletClusterer:
         return [cluster.finalize() for cluster in pending]
 
 
-def _max_pair_similarity(
+def _median_pair_similarity(
     left: list[list[float]], right: list[list[float]]
 ) -> float:
     if not left or not right:
         return -1.0
-    best = -1.0
-    for a in left:
-        for b in right:
-            similarity = cosine_similarity(a, b)
-            if similarity > best:
-                best = similarity
-    return best
+    similarities = sorted(
+        cosine_similarity(a, b) for a in left for b in right
+    )
+    n = len(similarities)
+    if n == 0:
+        return -1.0
+    middle = n // 2
+    if n % 2 == 1:
+        return similarities[middle]
+    return (similarities[middle - 1] + similarities[middle]) / 2.0
