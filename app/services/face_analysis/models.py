@@ -19,35 +19,65 @@ class FaceDetection:
 
 
 @dataclass(frozen=True)
-class TrackedDetection:
-    track_id: str
-    detection: FaceDetection
+class PersonDetection:
+    timestamp_seconds: float
+    frame_index: int
+    bbox: tuple[float, float, float, float]
+    confidence: float
 
 
 @dataclass(frozen=True)
-class Tracklet:
+class TrackedPerson:
     track_id: str
-    detections: list[FaceDetection]
+    detection: PersonDetection
+
+
+@dataclass(frozen=True)
+class TrackedFaceDetection:
+    detection: FaceDetection
+    person_track_id: str | None
+
+
+@dataclass(frozen=True)
+class PersonTracklet:
+    """All observations of one person (by MOT track_id) across one video.
+
+    ``person_detections`` is when the person bbox was on screen.
+    ``face_detections`` is the subset of frames where a face inside that bbox
+    was also recognized — this is what gives the track its identity.
+    """
+
+    track_id: str
+    person_detections: list[PersonDetection]
+    face_detections: list[FaceDetection]
     aggregated_embedding: list[float]
     start_seconds: float
     end_seconds: float
 
     @property
-    def detection_count(self) -> int:
-        return len(self.detections)
+    def face_count(self) -> int:
+        return len(self.face_detections)
+
+    @property
+    def person_observation_count(self) -> int:
+        return len(self.person_detections)
+
+    @property
+    def has_identity(self) -> bool:
+        return bool(self.face_detections) and bool(self.aggregated_embedding)
 
 
 @dataclass(frozen=True)
 class WithinVideoCluster:
     cluster_id: str
-    tracklets: list[Tracklet]
+    tracklets: list[PersonTracklet]
     aggregated_embedding: list[float]
     start_seconds: float
     end_seconds: float
 
     @property
     def detection_count(self) -> int:
-        return sum(tracklet.detection_count for tracklet in self.tracklets)
+        return sum(tracklet.person_observation_count for tracklet in self.tracklets)
 
 
 @dataclass(frozen=True)

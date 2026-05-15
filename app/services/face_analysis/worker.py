@@ -42,10 +42,13 @@ def _analyze_video(request: dict) -> dict:
             s3_url=str(request["s3_url"]),
             destination_dir=Path(temp_dir),
         )
+        thumbnail_dir = Path("/tmp/face_analyzer") / str(video_id)
         analysis = FaceVideoAnalyzer().analyze(
             video_path,
             known_actors=known_actors,
+            thumbnail_dir=thumbnail_dir,
         )
+        logger.info("Saved cluster thumbnails to %s", thumbnail_dir)
 
         return {
             "video_id": video_id,

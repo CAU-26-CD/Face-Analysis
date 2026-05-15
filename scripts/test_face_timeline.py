@@ -9,8 +9,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.services.face_analysis.actor_matcher import ActorMatcher
 from app.services.face_analysis.analyzer import FaceVideoAnalyzer
+from app.services.face_analysis.person_tracker import PersonTracker
 from app.services.face_analysis.timeline import AppearanceTimelineBuilder
-from app.services.face_analysis.tracker import FaceTracker
 from app.services.face_analysis.tracklet_clusterer import TrackletClusterer
 from app.services.face_analysis.video_reader import VideoFrameReader
 
@@ -24,7 +24,7 @@ def main() -> None:
 
     analyzer = FaceVideoAnalyzer(
         frame_reader=VideoFrameReader(frame_interval_seconds=args.frame_interval),
-        tracker=FaceTracker(similarity_threshold=args.track_threshold),
+        person_tracker=PersonTracker(track_buffer=args.track_buffer),
         tracklet_clusterer=TrackletClusterer(similarity_threshold=args.cluster_threshold),
         actor_matcher=ActorMatcher(
             match_threshold=args.match_threshold,
@@ -36,14 +36,16 @@ def main() -> None:
     def progress(
         sampled_frame_count: int,
         timestamp_seconds: float,
-        detection_count: int,
+        tracked_persons: int,
+        face_count: int,
     ) -> None:
         if sampled_frame_count == 1 or sampled_frame_count % 10 == 0:
             print(
                 "progress",
                 f"frames={sampled_frame_count}",
                 f"timestamp={timestamp_seconds:.1f}s",
-                f"detections={detection_count}",
+                f"persons={tracked_persons}",
+                f"faces={face_count}",
                 file=sys.stderr,
             )
 
@@ -66,14 +68,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--frame-interval",
         type=float,
-        default=5.0,
-        help="Seconds between sampled frames. Lower is slower and more precise.",
+        default=0.1,
+        help="Seconds between sampled frames. 0.1 = 10 fps.",
     )
     parser.add_argument(
-        "--track-threshold",
-        type=float,
-        default=0.50,
-        help="Cosine similarity threshold for the per-frame tracker.",
+        "--track-buffer",
+        type=int,
+        default=100,
+        help="Frames a lost person track is kept alive (ByteTrack).",
     )
     parser.add_argument(
         "--cluster-threshold",
@@ -85,7 +87,7 @@ def parse_args() -> argparse.Namespace:
         "--match-threshold",
         type=float,
         default=0.50,
-        help="Cosine similarity threshold for matching a within-video cluster to a known actor.",
+        help="Cosine similarity threshold for matching a cluster to a known actor.",
     )
     parser.add_argument(
         "--suggest-threshold",
@@ -97,7 +99,7 @@ def parse_args() -> argparse.Namespace:
         "--max-gap",
         type=float,
         default=6.0,
-        help="Maximum seconds between detections to merge them into one appearance.",
+        help="Maximum seconds between observations to merge them into one appearance.",
     )
     return parser.parse_args()
 
