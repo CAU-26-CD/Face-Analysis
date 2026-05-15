@@ -118,34 +118,104 @@ def test_empty_input_returns_empty_clusters():
     assert clusterer.cluster([]) == []
 
 
-def test_max_exemplar_similarity_merges_profile_and_frontal_tracklets():
-    """Reproduces the over-split case from real videos: a profile-only
-    tracklet's centroid is far from a frontal tracklet's centroid, but each
-    tracklet retains a high-quality exemplar that matches the other strongly.
-    Multi-exemplar (max-pair) similarity should merge them."""
-    frontal_embedding = [1.0, 0.0, 0.0]
-    profile_embedding = [0.2, 0.98, 0.0]
+def test_same_person_with_multiple_agreeing_exemplars_merges():
+    """Same person across two tracklets: every exemplar pair has high
+    similarity. Top-K mean should easily clear the threshold."""
+    embedding_a = [1.0, 0.0, 0.0]
+    embedding_b = [0.97, 0.05, 0.0]
+    embedding_c = [0.95, 0.0, 0.05]
 
-    frontal_tracklet = PersonTracklet(
-        track_id="frontal",
+    tracklet_1 = PersonTracklet(
+        track_id="person_1",
         person_detections=[_person_detection(0.0)],
-        face_detections=[_face_detection(0.0, frontal_embedding)],
-        aggregated_embedding=frontal_embedding,
-        exemplar_embeddings=[frontal_embedding, profile_embedding],
+        face_detections=[_face_detection(0.0, embedding_a)],
+        aggregated_embedding=embedding_a,
+        exemplar_embeddings=[embedding_a, embedding_b, embedding_c],
         start_seconds=0.0,
         end_seconds=5.0,
     )
-    profile_tracklet = PersonTracklet(
-        track_id="profile",
+    tracklet_2 = PersonTracklet(
+        track_id="person_2",
         person_detections=[_person_detection(10.0)],
-        face_detections=[_face_detection(10.0, profile_embedding)],
-        aggregated_embedding=profile_embedding,
-        exemplar_embeddings=[profile_embedding, frontal_embedding],
+        face_detections=[_face_detection(10.0, embedding_b)],
+        aggregated_embedding=embedding_b,
+        exemplar_embeddings=[embedding_a, embedding_b, embedding_c],
         start_seconds=10.0,
         end_seconds=15.0,
     )
 
-    clusterer = TrackletClusterer(similarity_threshold=0.6)
-    clusters = clusterer.cluster([frontal_tracklet, profile_tracklet])
+    clusters = TrackletClusterer().cluster([tracklet_1, tracklet_2])
+    assert len(clusters) == 1
 
-    assert len(clusters) == 1, "profile + frontal exemplars should bridge the merge"
+
+def test_different_people_with_single_outlier_pair_does_not_merge():
+    """Over-merge guard. Two unrelated identities, but one exemplar pair
+    happens to be similar (the classic Phase-5 false-merge cause). Top-K mean
+    should dilute this single outlier with the other low-similarity pairs and
+    keep them in separate clusters."""
+    person_a_embeddings = [
+        [1.0, 0.0, 0.0],
+        [0.95, 0.1, 0.0],
+        [0.9, 0.2, 0.0],
+    ]
+    person_b_embeddings = [
+        [0.6, 0.8, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.9, 0.1],
+    ]
+
+    tracklet_a = PersonTracklet(
+        track_id="person_a",
+        person_detections=[_person_detection(0.0)],
+        face_detections=[_face_detection(0.0, person_a_embeddings[0])],
+        aggregated_embedding=person_a_embeddings[0],
+        exemplar_embeddings=person_a_embeddings,
+        start_seconds=0.0,
+        end_seconds=5.0,
+    )
+    tracklet_b = PersonTracklet(
+        track_id="person_b",
+        person_detections=[_person_detection(10.0)],
+        face_detections=[_face_detection(10.0, person_b_embeddings[1])],
+        aggregated_embedding=person_b_embeddings[1],
+        exemplar_embeddings=person_b_embeddings,
+        start_seconds=10.0,
+        end_seconds=15.0,
+    )
+
+    clusters = TrackletClusterer().cluster([tracklet_a, tracklet_b])
+    assert len(clusters) == 2, "single high-similarity outlier pair should not trigger merge"
+
+
+def test_profile_and_frontal_same_person_still_merges_under_median():
+    """Phase 5's original target case must keep working. Two tracklets of the
+    same person, each carrying both a profile and a frontal exemplar. The
+    cross pairs are: (frontal, frontal) high, (profile, profile) high,
+    (frontal, profile) lower. Median stays well above threshold because half
+    the pairs are same-pose matches."""
+    frontal = [1.0, 0.0, 0.0]
+    profile = [0.3, 0.95, 0.0]
+
+    tracklet_1 = PersonTracklet(
+        track_id="t1",
+        person_detections=[_person_detection(0.0)],
+        face_detections=[_face_detection(0.0, frontal)],
+        aggregated_embedding=frontal,
+        exemplar_embeddings=[frontal, profile],
+        start_seconds=0.0,
+        end_seconds=5.0,
+    )
+    tracklet_2 = PersonTracklet(
+        track_id="t2",
+        person_detections=[_person_detection(10.0)],
+        face_detections=[_face_detection(10.0, profile)],
+        aggregated_embedding=profile,
+        exemplar_embeddings=[frontal, profile],
+        start_seconds=10.0,
+        end_seconds=15.0,
+    )
+
+    clusters = TrackletClusterer().cluster([tracklet_1, tracklet_2])
+    assert len(clusters) == 1
+
+
