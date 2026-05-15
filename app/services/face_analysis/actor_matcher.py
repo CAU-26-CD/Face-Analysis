@@ -79,12 +79,20 @@ class ActorMatcher:
         cluster: WithinVideoCluster,
         known_actors: list[KnownActor],
     ) -> tuple[KnownActor | None, float]:
+        candidate_embeddings = list(cluster.exemplar_embeddings) or (
+            [list(cluster.aggregated_embedding)]
+            if cluster.aggregated_embedding
+            else []
+        )
         best_actor: KnownActor | None = None
         best_similarity = -1.0
         for actor in known_actors:
-            similarity = cosine_similarity(
-                cluster.aggregated_embedding,
-                actor.face_template,
+            similarity = max(
+                (
+                    cosine_similarity(embedding, actor.face_template)
+                    for embedding in candidate_embeddings
+                ),
+                default=-1.0,
             )
             if similarity > best_similarity:
                 best_similarity = similarity

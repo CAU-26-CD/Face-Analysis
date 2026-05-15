@@ -36,3 +36,6 @@ __MACOSX/
 # 테스트
 .pytest_cache/
 .coverage
+# YOLO weights (auto-downloaded by ultralytics)
+yolo*.pt
+*.onnx
