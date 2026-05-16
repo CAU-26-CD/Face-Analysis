@@ -5,7 +5,7 @@ from app.services.face_analysis.models import VideoFrame
 
 
 class VideoFrameReader:
-    def __init__(self, frame_interval_seconds: float = 1.0):
+    def __init__(self, frame_interval_seconds: float = 0.1):
         if frame_interval_seconds <= 0:
             raise ValueError("frame_interval_seconds must be greater than 0")
 

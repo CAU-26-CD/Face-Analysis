@@ -12,17 +12,29 @@ back to the BE callback URL.
 
 ```
 S3 download
-  → VideoFrameReader (sampled frames)
-  → InsightFaceDetector (bbox + 512-d embedding)
-  → FaceTracker            (per-frame  → track_id)
-  → TrackletClusterer      (within-video tracklet merge → cluster_id)
-  → ActorMatcher           (cross-video match against known_actors)
+  → VideoFrameReader            (10 fps sampling)
+  → for each frame:
+      PersonDetector            (YOLOv11s, COCO person class)
+      PersonTracker             (Ultralytics ByteTrack — IoU + Kalman)
+      InsightFaceDetector       (face bbox + 512-d embedding)
+      FacePersonAssociator      (bind faces to person_track_id)
+  → PersonTracklets             (per track: top-K exemplar embeddings)
+  → TrackletClusterer           (median-pair similarity → cluster_id)
+  → ActorMatcher                (cross-video match vs known_actors)
   → AppearanceTimelineBuilder
   → callback to BE
 ```
 
-Each stage uses progressively cleaner embeddings and a different threshold
-(`0.50` tracker → `0.40` clusterer → `match 0.50 / suggest 0.40` matcher).
+Tracking is on the **person bbox**, not the face. A person whose face turns
+to profile or is briefly occluded by hair keeps the same track_id as long as
+their body bbox is detected; face identity is layered on top of the body
+track instead of being the tracking signal itself.
+
+Cluster matching uses **median** of all cross-pair cosine similarities
+between two exemplar sets — same-person pairs are mostly high (median high),
+while different-people pairs are mostly low with a few outliers (median
+stays low). Default thresholds: clusterer `0.40`, matcher `match 0.50 /
+suggest 0.40`.
 
 ## API
 
@@ -289,3 +301,25 @@ The BE server should:
 5. Surface `new_candidates` to the user for labeling, then persist the
    resulting `(actor_id, face_template)` rows into the project gallery so
    they are passed back as `known_actors` on subsequent `/analyze` calls.
+
+## Migration notes (MOT redesign)
+
+The analyzer's tracking layer was rewritten from a face-only embedding
+tracker (sampling at 1 fps) into a proper MOT pipeline: YOLO person
+detection + ByteTrack on person bboxes + face-to-person association at
+10 fps. Things BE-side teams should be aware of:
+
+- **Callback JSON shape is unchanged.** `appearances`, `new_candidates`,
+  `embedding`, `known_actors[].face_template` — all the same. No BE code
+  changes required.
+- **`detection_count` semantics shifted.** It now counts *person bbox
+  observations*, not face detections, so values are typically 5–10× larger
+  than before. If any BE/UI logic uses `detection_count` as a confidence
+  threshold (e.g. "drop candidates with n < 10"), rescale accordingly.
+- **First run downloads YOLO weights.** Ultralytics fetches `yolo11s.pt`
+  (~18 MB) into the working directory the first time `PersonDetector`
+  initializes. Deploys without internet should pre-bundle the file or set
+  `model_name` to a local path.
+- **CPU vs GPU.** 10 fps × YOLO + InsightFace is CPU-bound; expect roughly
+  real-time (or slower) on Apple Silicon CPU, much faster with MPS/CUDA.
+  `PersonDetector(device="mps")` / `device="cuda"` to enable.

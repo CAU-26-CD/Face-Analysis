@@ -24,7 +24,7 @@ def main() -> None:
         analyzer.read_sampled_frames(video_path),
         start=1,
     ):
-        detections = analyzer.detector.detect(video_frame)
+        detections = analyzer.face_detector.detect(video_frame)
         print(
             "frame",
             checked_frames,
