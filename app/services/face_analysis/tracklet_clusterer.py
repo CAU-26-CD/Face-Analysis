@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 
-from app.services.face_analysis.embeddings import cosine_similarity
+import numpy as np
+
 from app.services.face_analysis.models import PersonTracklet, WithinVideoCluster
 
 
@@ -60,27 +61,47 @@ class TrackletClusterer:
     ByteTrack keeps a stable track_id while the person bbox is visible, but a
     person who leaves the frame longer than ``track_buffer`` gets a new
     track_id. This stage stitches those back together by comparing tracklets'
-    *exemplar sets* using the **median** of all cross-pair cosine similarities.
+    *exemplar sets* using the **median** of all cross-pair cosine similarities,
+    backed up by an aggregate-centroid rule and gated by a temporal-overlap
+    veto.
 
-    Why median, not max or mean:
-      - Max merges on a single outlier pair. Different people occasionally
-        produce one high-similarity pair (profile/lighting/mask coincidence),
-        which Phase 5 saw as cross-identity over-merges in real videos.
-      - Mean is brittle when one tracklet has highly self-similar exemplars
-        (same person should!) — a single outlier pair gets multiplied across
-        all paired exemplars from the other set and skews the average.
-      - Median requires the *majority* of cross-pair similarities to be high.
-        Same-person sets produce many high pairs; different-person sets
-        produce a few outliers at most, which the median ignores.
+    Three rules govern a merge of tracklet ``T`` into pending cluster ``C``:
 
-    Tracklets that never observed a face (no identity available) are dropped.
+    1. **Temporal-overlap veto.** If ``T``'s on-screen interval intersects any
+       tracklet already in ``C``, they co-occur and cannot be the same person.
+       Hard block — short-circuits all similarity scoring.
+
+    2. **Median pair similarity** (primary). ``median(cosine(T_exemplars,
+       C_exemplars)) >= similarity_threshold``. Same-person pairs are mostly
+       high; different-people pairs are mostly low with a few outliers, which
+       the median ignores. Why not max/mean: max merges on a single outlier;
+       mean amplifies one stray pair across the whole product.
+
+    3. **Centroid backup** (secondary). ``cosine(T.aggregated, C.aggregated) >=
+       centroid_merge_threshold``. Catches the case where the same person's
+       exemplar set is split across very different poses (frontal/profile),
+       so cross-pair medians dip below the primary threshold even though the
+       per-set means are tightly aligned. The threshold is set well above the
+       median bar so it only fires on confident centroid agreement.
+
+    Either #2 OR #3 clears the bar; #1 vetoes both. Tracklets that never
+    observed a face (no identity available) are dropped.
     """
 
-    def __init__(self, similarity_threshold: float = 0.40):
+    def __init__(
+        self,
+        similarity_threshold: float = 0.40,
+        centroid_merge_threshold: float = 0.60,
+    ):
         if not -1.0 <= similarity_threshold <= 1.0:
             raise ValueError("similarity_threshold must be between -1.0 and 1.0")
+        if not -1.0 <= centroid_merge_threshold <= 1.0:
+            raise ValueError(
+                "centroid_merge_threshold must be between -1.0 and 1.0"
+            )
 
         self.similarity_threshold = similarity_threshold
+        self.centroid_merge_threshold = centroid_merge_threshold
 
     def cluster(self, tracklets: list[PersonTracklet]) -> list[WithinVideoCluster]:
         identified = [t for t in tracklets if t.has_identity]
@@ -89,17 +110,30 @@ class TrackletClusterer:
         pending: list[_PendingCluster] = []
         for tracklet in ordered:
             best_cluster = None
-            best_similarity = -1.0
+            best_score = -1.0
             for cluster in pending:
-                similarity = _median_pair_similarity(
+                if _temporal_overlap(tracklet, cluster):
+                    continue
+                median_sim = _median_pair_similarity(
                     tracklet.exemplar_embeddings,
                     cluster.exemplar_embeddings,
                 )
-                if similarity > best_similarity:
-                    best_similarity = similarity
+                centroid_sim = _centroid_cosine(
+                    tracklet.aggregated_embedding,
+                    cluster.aggregated_embedding,
+                )
+                passes = (
+                    median_sim >= self.similarity_threshold
+                    or centroid_sim >= self.centroid_merge_threshold
+                )
+                if not passes:
+                    continue
+                score = max(median_sim, centroid_sim)
+                if score > best_score:
+                    best_score = score
                     best_cluster = cluster
 
-            if best_cluster is None or best_similarity < self.similarity_threshold:
+            if best_cluster is None:
                 pending.append(
                     _PendingCluster.from_tracklet(
                         cluster_id=f"cluster_{len(pending) + 1}",
@@ -112,18 +146,50 @@ class TrackletClusterer:
         return [cluster.finalize() for cluster in pending]
 
 
+def _temporal_overlap(
+    tracklet: PersonTracklet, cluster: _PendingCluster
+) -> bool:
+    """True iff the tracklet's interval intersects any tracklet already in
+    the cluster. A person can't share a frame with themselves, so any overlap
+    means different identities — even if their embeddings happen to agree.
+    """
+    for existing in cluster.tracklets:
+        if (
+            tracklet.start_seconds <= existing.end_seconds
+            and existing.start_seconds <= tracklet.end_seconds
+        ):
+            return True
+    return False
+
+
+def _centroid_cosine(left: list[float], right: list[float]) -> float:
+    if not left or not right:
+        return -1.0
+    left_vec = np.asarray(left, dtype=np.float32)
+    right_vec = np.asarray(right, dtype=np.float32)
+    left_norm = float(np.linalg.norm(left_vec))
+    right_norm = float(np.linalg.norm(right_vec))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return -1.0
+    return float(np.dot(left_vec, right_vec) / (left_norm * right_norm))
+
+
 def _median_pair_similarity(
     left: list[list[float]], right: list[list[float]]
 ) -> float:
     if not left or not right:
         return -1.0
-    similarities = sorted(
-        cosine_similarity(a, b) for a in left for b in right
-    )
-    n = len(similarities)
-    if n == 0:
-        return -1.0
-    middle = n // 2
-    if n % 2 == 1:
-        return similarities[middle]
-    return (similarities[middle - 1] + similarities[middle]) / 2.0
+
+    left_matrix = np.asarray(left, dtype=np.float32)
+    right_matrix = np.asarray(right, dtype=np.float32)
+
+    left_norms = np.linalg.norm(left_matrix, axis=1, keepdims=True)
+    right_norms = np.linalg.norm(right_matrix, axis=1, keepdims=True)
+    # Treat zero-norm rows as cosine=0 against everything else.
+    left_norms[left_norms == 0.0] = 1.0
+    right_norms[right_norms == 0.0] = 1.0
+
+    left_normalized = left_matrix / left_norms
+    right_normalized = right_matrix / right_norms
+    similarities = left_normalized @ right_normalized.T
+    return float(np.median(similarities))
