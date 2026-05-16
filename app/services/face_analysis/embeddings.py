@@ -1,18 +1,19 @@
-from math import sqrt
+import numpy as np
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
     if len(left) != len(right):
         raise ValueError("Embeddings must have the same dimension")
 
-    dot_product = sum(left_value * right_value for left_value, right_value in zip(left, right))
-    left_norm = sqrt(sum(value * value for value in left))
-    right_norm = sqrt(sum(value * value for value in right))
+    left_vec = np.asarray(left, dtype=np.float32)
+    right_vec = np.asarray(right, dtype=np.float32)
 
-    if left_norm == 0 or right_norm == 0:
+    left_norm = float(np.linalg.norm(left_vec))
+    right_norm = float(np.linalg.norm(right_vec))
+    if left_norm == 0.0 or right_norm == 0.0:
         return 0.0
 
-    return dot_product / (left_norm * right_norm)
+    return float(np.dot(left_vec, right_vec) / (left_norm * right_norm))
 
 
 def running_average(
@@ -24,7 +25,6 @@ def running_average(
         raise ValueError("Embeddings must have the same dimension")
 
     next_count = current_count + 1
-    return [
-        ((value * current_count) + new_value) / next_count
-        for value, new_value in zip(current, incoming)
-    ]
+    current_vec = np.asarray(current, dtype=np.float64)
+    incoming_vec = np.asarray(incoming, dtype=np.float64)
+    return ((current_vec * current_count + incoming_vec) / next_count).tolist()
