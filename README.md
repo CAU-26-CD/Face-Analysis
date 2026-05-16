@@ -138,12 +138,37 @@ AWS_SECRET_ACCESS_KEY=your-secret-key
 AWS_REGION=ap-northeast-2
 S3_BUCKET_NAME=your-video-bucket
 ANALYZER_SECRET=change-me
+
+# Optional — inference accelerator (auto-detected if unset)
+FACE_ANALYZER_DEVICE=mps
+FACE_ANALYZER_ONNX_PROVIDERS=CoreMLExecutionProvider,CPUExecutionProvider
+
+# Optional — S3 multipart download tuning
+S3_DOWNLOAD_MAX_CONCURRENCY=16
+S3_DOWNLOAD_CHUNKSIZE_MB=16
 ```
 
 `CALLBACK_SECRET` is also accepted as a fallback for `ANALYZER_SECRET`.
 
 If `S3_BUCKET_NAME` is set, the analyzer downloads with boto3 using `s3_key`.
 If it is not set, it falls back to downloading `s3_url` directly.
+
+### Accelerator selection
+
+When unset, the analyzer auto-detects: Apple Silicon resolves to
+`device="mps"` with ONNX Runtime providers
+`["CoreMLExecutionProvider", "CPUExecutionProvider"]`; other hosts fall back
+to CPU. Override `FACE_ANALYZER_DEVICE` (`mps` / `cuda` / `cpu`) and
+`FACE_ANALYZER_ONNX_PROVIDERS` (comma-separated) to deploy with CUDA or to
+force CPU for benchmarking.
+
+### S3 key normalization
+
+`s3_key` is tried as-is first. On a 404 (`HeadObject` not found) the
+analyzer retries under the alternate Unicode normalization (NFC ↔ NFD).
+macOS Finder uploads often store Hangul filenames as NFD while server-side
+keys arrive in NFC (or vice-versa); this fallback prevents phantom 404s
+without requiring callers to canonicalize.
 
 ## Run Locally
 

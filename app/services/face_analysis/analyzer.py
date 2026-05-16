@@ -1,6 +1,9 @@
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+import numpy as np
 
 from app.services.face_analysis.actor_matcher import ActorMatcher
 from app.services.face_analysis.detector import InsightFaceDetector
@@ -19,12 +22,20 @@ from app.services.face_analysis.models import (
     VideoFrame,
     WithinVideoCluster,
 )
+from app.services.face_analysis.exemplars import quality_score
 from app.services.face_analysis.person_detector import PersonDetector
 from app.services.face_analysis.person_tracker import PersonTracker
-from app.services.face_analysis.thumbnails import ClusterThumbnailExtractor
+from app.services.face_analysis.thumbnails import ClusterThumbnailExtractor, crop_padded
 from app.services.face_analysis.timeline import AppearanceTimelineBuilder
 from app.services.face_analysis.tracklet_clusterer import TrackletClusterer
 from app.services.face_analysis.video_reader import VideoFrameReader
+
+# Per-track cap on cached BGR crops kept for the thumbnail step. Crops are
+# evicted by lowest quality_score once the cap is hit, so a long tracklet
+# only keeps the K most thumbnail-worthy frames. Cap × tracks × ~100 KB is
+# the memory footprint, so this trades a small bound for skipping the
+# end-of-job video reopen + keyframe seek.
+MAX_CROPS_PER_TRACK = 20
 
 
 @dataclass
@@ -32,6 +43,7 @@ class _TrackBuffer:
     track_id: str
     person_detections: list[PersonDetection] = field(default_factory=list)
     face_detections: list[FaceDetection] = field(default_factory=list)
+    cropped_faces: list[tuple[FaceDetection, Any]] = field(default_factory=list)
 
 
 class FaceVideoAnalyzer:
@@ -61,13 +73,17 @@ class FaceVideoAnalyzer:
         timeline_builder: AppearanceTimelineBuilder | None = None,
         thumbnail_extractor: ClusterThumbnailExtractor | None = None,
         exemplars_per_tracklet: int = 5,
+        device: str | None = None,
+        onnx_providers: list[str] | None = None,
     ):
         if exemplars_per_tracklet < 1:
             raise ValueError("exemplars_per_tracklet must be >= 1")
         self.frame_reader = frame_reader or VideoFrameReader()
-        self.person_detector = person_detector or PersonDetector()
+        self.person_detector = person_detector or PersonDetector(device=device)
         self.person_tracker = person_tracker or PersonTracker()
-        self.face_detector = face_detector or InsightFaceDetector()
+        self.face_detector = face_detector or InsightFaceDetector(
+            providers=onnx_providers,
+        )
         self.face_associator = face_associator or FacePersonAssociator()
         self.tracklet_clusterer = tracklet_clusterer or TrackletClusterer()
         self.actor_matcher = actor_matcher or ActorMatcher()
@@ -97,6 +113,9 @@ class FaceVideoAnalyzer:
         self.person_tracker.reset()
         track_buffers: dict[str, _TrackBuffer] = {}
 
+        want_crops = thumbnail_dir is not None
+        padding_ratio = self.thumbnail_extractor.padding_ratio if want_crops else 0.0
+
         for sampled_frame_count, video_frame in enumerate(
             self.frame_reader.read_frames(path),
             start=1,
@@ -107,7 +126,12 @@ class FaceVideoAnalyzer:
             tracked_faces = self.face_associator.associate(face_detections, tracked_persons)
 
             self._record_persons(tracked_persons, track_buffers)
-            self._record_faces(tracked_faces, track_buffers)
+            self._record_faces(
+                tracked_faces,
+                track_buffers,
+                frame=video_frame.frame if want_crops else None,
+                padding_ratio=padding_ratio,
+            )
 
             if progress_callback is not None:
                 progress_callback(
@@ -120,7 +144,13 @@ class FaceVideoAnalyzer:
         tracklets = self._finalize_tracklets(track_buffers)
         clusters = self.tracklet_clusterer.cluster(tracklets)
         if thumbnail_dir is not None:
-            self.thumbnail_extractor.extract(path, clusters, thumbnail_dir)
+            cropped_faces_by_track = {
+                track_id: buf.cropped_faces
+                for track_id, buf in track_buffers.items()
+            }
+            self.thumbnail_extractor.extract(
+                clusters, thumbnail_dir, cropped_faces_by_track
+            )
         match_result = self.actor_matcher.match(clusters, known_actors)
         appearances = self._build_appearances(clusters, match_result)
 
@@ -146,6 +176,8 @@ class FaceVideoAnalyzer:
     def _record_faces(
         tracked_faces: list[TrackedFaceDetection],
         track_buffers: dict[str, _TrackBuffer],
+        frame: Any | None = None,
+        padding_ratio: float = 0.0,
     ) -> None:
         for tracked in tracked_faces:
             if tracked.person_track_id is None:
@@ -154,6 +186,19 @@ class FaceVideoAnalyzer:
             if buffer is None:
                 continue
             buffer.face_detections.append(tracked.detection)
+
+            if frame is None:
+                continue
+            crop = crop_padded(frame, tracked.detection.bbox, padding_ratio)
+            if crop is None:
+                continue
+            buffer.cropped_faces.append((tracked.detection, crop))
+            if len(buffer.cropped_faces) > MAX_CROPS_PER_TRACK:
+                worst_index = min(
+                    range(len(buffer.cropped_faces)),
+                    key=lambda i: quality_score(buffer.cropped_faces[i][0]),
+                )
+                buffer.cropped_faces.pop(worst_index)
 
     def _finalize_tracklets(
         self,
@@ -219,8 +264,5 @@ def _mean_embedding(embeddings: list[list[float]]) -> list[float]:
     dim = len(embeddings[0])
     if any(len(e) != dim for e in embeddings):
         raise ValueError("all embeddings must have the same dimension")
-    summed = [0.0] * dim
-    for embedding in embeddings:
-        for i in range(dim):
-            summed[i] += embedding[i]
-    return [value / len(embeddings) for value in summed]
+    matrix = np.asarray(embeddings, dtype=np.float64)
+    return matrix.mean(axis=0).tolist()

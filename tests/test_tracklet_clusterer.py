@@ -187,6 +187,58 @@ def test_different_people_with_single_outlier_pair_does_not_merge():
     assert len(clusters) == 2, "single high-similarity outlier pair should not trigger merge"
 
 
+def test_temporally_overlapping_tracklets_do_not_merge_even_if_embeddings_match():
+    """Two different people on screen at the same time can have surprisingly
+    high embedding similarity (similar features, similar lighting). The
+    temporal-overlap veto blocks the merge regardless of similarity, since
+    one person can't occupy two screen positions simultaneously."""
+    same_embedding = [1.0, 0.0, 0.0]
+    tracklet_1 = _tracklet("person_1", 0.0, 40.0, same_embedding)
+    tracklet_2 = _tracklet("person_2", 10.0, 50.0, same_embedding)  # overlaps 10-40
+
+    clusters = TrackletClusterer().cluster([tracklet_1, tracklet_2])
+    assert len(clusters) == 2, "co-occurring tracklets must stay separate"
+
+
+def test_centroid_backup_merges_when_median_dips_below_threshold():
+    """Same person, but a wide pose mix makes most cross-pairs land at ~0.3,
+    pulling the median below the primary threshold. The centroid-backup rule
+    catches it because the per-set mean embeddings are still tightly aligned.
+    Non-overlapping time spans, so the veto doesn't fire."""
+    frontal = [1.0, 0.0, 0.0]
+    profile_left = [0.3, 0.95, 0.0]
+    profile_right = [0.3, -0.95, 0.0]
+
+    tracklet_1 = PersonTracklet(
+        track_id="t1",
+        person_detections=[_person_detection(0.0)],
+        face_detections=[_face_detection(0.0, frontal)],
+        aggregated_embedding=frontal,
+        exemplar_embeddings=[frontal, profile_left, profile_right],
+        start_seconds=0.0,
+        end_seconds=5.0,
+    )
+    tracklet_2 = PersonTracklet(
+        track_id="t2",
+        person_detections=[_person_detection(20.0)],
+        face_detections=[_face_detection(20.0, frontal)],
+        aggregated_embedding=frontal,
+        exemplar_embeddings=[frontal, profile_left, profile_right],
+        start_seconds=20.0,
+        end_seconds=25.0,
+    )
+
+    clusterer = TrackletClusterer(
+        similarity_threshold=0.50,
+        centroid_merge_threshold=0.60,
+    )
+    clusters = clusterer.cluster([tracklet_1, tracklet_2])
+    assert len(clusters) == 1, (
+        "centroid backup should merge when per-set means agree even if the "
+        "cross-pair median dips below the primary threshold"
+    )
+
+
 def test_profile_and_frontal_same_person_still_merges_under_median():
     """Phase 5's original target case must keep working. Two tracklets of the
     same person, each carrying both a profile and a frontal exemplar. The
