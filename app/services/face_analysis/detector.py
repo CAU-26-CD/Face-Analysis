@@ -17,7 +17,7 @@ class InsightFaceDetector:
             raise ValueError("min_bbox_side_pixels must be >= 0")
 
         self.model_name = model_name
-        self.providers = providers or ["CPUExecutionProvider"]
+        self.providers = providers or ["CUDAExecutionProvider", "CPUExecutionProvider"]
         self.det_size = det_size
         self.allowed_modules = allowed_modules or ["detection", "recognition"]
         self.min_confidence = min_confidence

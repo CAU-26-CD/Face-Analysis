@@ -39,3 +39,4 @@ __MACOSX/
 # YOLO weights (auto-downloaded by ultralytics)
 yolo*.pt
 *.onnx
+.claude/
