@@ -1,3 +1,4 @@
+import os
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +81,7 @@ class FaceVideoAnalyzer:
             raise ValueError("exemplars_per_tracklet must be >= 1")
         self.frame_reader = frame_reader or VideoFrameReader()
         self.person_detector = person_detector or PersonDetector(device=device)
+
         self.person_tracker = person_tracker or PersonTracker()
         self.face_detector = face_detector or InsightFaceDetector(
             providers=onnx_providers,
