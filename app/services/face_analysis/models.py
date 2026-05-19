@@ -130,3 +130,8 @@ class FaceAnalysisResult:
     video_path: str
     appearances: list[FaceAppearance]
     new_candidates: list[NewActorCandidate] = field(default_factory=list)
+    matched: list[MatchedActor] = field(default_factory=list)
+    # Local paths of saved thumbnail crops per cluster_id. The first entry in
+    # each list is the highest-quality pick (top of `select_top_k_diverse`),
+    # so the worker can upload `paths[0]` as the canonical thumbnail.
+    cluster_thumbnail_paths: dict[str, list[str]] = field(default_factory=dict)

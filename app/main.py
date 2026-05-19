@@ -16,6 +16,12 @@ class AnalyzeRequest(BaseModel):
     s3_url: HttpUrl
     callback_url: HttpUrl
     known_actors: list[KnownActorPayload] = Field(default_factory=list)
+    # S3 key prefix BE wants thumbnails uploaded under, e.g. "42/27/" — the
+    # analyzer appends "thumb-{idx}.jpg" so video + thumbnails end up in the
+    # same per-session folder. Optional for back-compat with older callers
+    # that have not yet been updated; in that case the legacy
+    # "thumbnails/{video_id}/" layout is used instead.
+    thumbnail_dir: str | None = None
 
 
 class AnalyzeAcceptedResponse(BaseModel):
