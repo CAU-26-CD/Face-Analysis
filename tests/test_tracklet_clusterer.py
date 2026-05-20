@@ -239,6 +239,94 @@ def test_centroid_backup_merges_when_median_dips_below_threshold():
     )
 
 
+def test_short_overlap_is_treated_as_id_flip_and_allowed_to_merge():
+    """ByteTrack briefly assigns two ids when a person re-emerges from
+    occlusion: for ~a few frames the old and new tracks coexist. The veto
+    must tolerate that short window so the same-person tracklets can
+    stitch back together; a hard 'any overlap' check would split them
+    forever even though their embeddings agree."""
+    same_embedding = [1.0, 0.0, 0.0]
+    # Overlap = 0.3s, well under the default 0.5s ID-flip tolerance.
+    t1 = _tracklet("person_1", 0.0, 5.0, same_embedding)
+    t2 = _tracklet("person_2", 4.7, 9.0, same_embedding)
+
+    clusters = TrackletClusterer().cluster([t1, t2])
+    assert len(clusters) == 1, "short ID-flip overlap should not block merge"
+
+
+def test_long_overlap_still_vetoes_even_with_matching_embeddings():
+    """Sanity guard against the soft-veto: a sustained co-occurrence is
+    still two different people on screen at once, no matter how similar
+    their embeddings happen to be. The hard part of the veto is the part
+    we keep."""
+    same_embedding = [1.0, 0.0, 0.0]
+    t1 = _tracklet("person_1", 0.0, 10.0, same_embedding)
+    t2 = _tracklet("person_2", 2.0, 12.0, same_embedding)  # overlap = 8s
+
+    clusters = TrackletClusterer(min_overlap_seconds=0.5).cluster([t1, t2])
+    assert len(clusters) == 2, "sustained overlap must keep tracklets separate"
+
+
+def test_second_pass_keeps_distinct_identities_separate():
+    """The 2-pass is meant to be an *extra* merging chance, not a relaxed
+    one. Distinct identities that 1-pass correctly kept apart must still
+    be kept apart after the pairwise re-evaluation — otherwise we'd
+    happily merge two strangers just because nobody else stops us.
+
+    Three person-A tracklets interleaved with one person-B tracklet.
+    Expected: one cluster of size 3 (A) + one cluster of size 1 (B).
+    """
+    embedding_a = [1.0, 0.0, 0.0]
+    embedding_b = [0.0, 1.0, 0.0]  # orthogonal — clearly different person
+
+    tracklets = [
+        _tracklet("a1", 0.0, 5.0, embedding_a),
+        _tracklet("a2", 6.0, 11.0, embedding_a),
+        _tracklet("b1", 12.0, 17.0, embedding_b),
+        _tracklet("a3", 18.0, 23.0, embedding_a),
+    ]
+    clusters = TrackletClusterer().cluster(tracklets)
+
+    assert len(clusters) == 2
+    sizes = sorted(len(c.tracklets) for c in clusters)
+    assert sizes == [1, 3]
+
+
+def test_second_pass_merge_pair_directly_when_invoked():
+    """Direct invocation of the 2-pass path proves it actually folds
+    cluster pairs (not just a no-op wrapper). Construct two pending
+    clusters that would clearly merge — same embedding, non-overlapping
+    time spans — and feed them through ``_merge_clusters_pairwise``.
+    """
+    from app.services.face_analysis.tracklet_clusterer import _PendingCluster
+
+    embedding = [1.0, 0.0, 0.0]
+    t_left = _tracklet("left", 0.0, 5.0, embedding)
+    t_right = _tracklet("right", 10.0, 15.0, embedding)
+
+    left = _PendingCluster.from_tracklet("cluster_1", t_left)
+    right = _PendingCluster.from_tracklet("cluster_2", t_right)
+
+    merged = TrackletClusterer()._merge_clusters_pairwise([left, right])
+    assert len(merged) == 1
+    assert len(merged[0].tracklets) == 2
+
+
+def test_second_pass_respects_overlap_veto():
+    """2-pass shouldn't override the temporal veto: even if two cluster's
+    exemplars line up perfectly, sustained on-screen co-occurrence still
+    means two different people."""
+    same_embedding = [1.0, 0.0, 0.0]
+    # Two long-overlapping tracklets, identical embeddings → 1-pass keeps
+    # them separate via the veto. 2-pass should respect the same veto and
+    # not glue them.
+    t1 = _tracklet("person_1", 0.0, 30.0, same_embedding)
+    t2 = _tracklet("person_2", 5.0, 35.0, same_embedding)  # overlap 25s
+
+    clusters = TrackletClusterer(min_overlap_seconds=0.5).cluster([t1, t2])
+    assert len(clusters) == 2, "2-pass must not bypass the temporal veto"
+
+
 def test_profile_and_frontal_same_person_still_merges_under_median():
     """Phase 5's original target case must keep working. Two tracklets of the
     same person, each carrying both a profile and a frontal exemplar. The

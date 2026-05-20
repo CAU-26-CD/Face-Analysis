@@ -73,7 +73,11 @@ class FaceVideoAnalyzer:
         actor_matcher: ActorMatcher | None = None,
         timeline_builder: AppearanceTimelineBuilder | None = None,
         thumbnail_extractor: ClusterThumbnailExtractor | None = None,
-        exemplars_per_tracklet: int = 5,
+        # Default bumped from 5 → 10: a thicker exemplar pool per tracklet
+        # gives both the 1-pass clusterer and the 2-pass merge more pose
+        # coverage to score on, so frontal/profile splits stitch back
+        # together more often without false merges.
+        exemplars_per_tracklet: int = 10,
         device: str | None = None,
         onnx_providers: list[str] | None = None,
     ):
@@ -244,8 +248,14 @@ class FaceVideoAnalyzer:
         clusters: list[WithinVideoCluster],
         match_result: MatchResult,
     ) -> list[FaceAppearance]:
+        # actor_id is int but cluster_id is str — coerce so the timeline
+        # builder's sort key sees a uniform type. worker._build_callback_payload
+        # uses the new_cluster→temp_index map to disambiguate "actor:" vs
+        # "new:" anyway, so the stringified actor id here is just an opaque
+        # key, not user-facing data.
         person_id_by_cluster: dict[str, str] = {
-            matched.cluster_id: matched.actor_id for matched in match_result.matched
+            matched.cluster_id: str(matched.actor_id)
+            for matched in match_result.matched
         }
         for candidate in match_result.new_candidates:
             person_id_by_cluster[candidate.cluster_id] = candidate.cluster_id
