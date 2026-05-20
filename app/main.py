@@ -5,8 +5,11 @@ from app.services.face_analysis.worker import run_analysis_job
 
 
 class KnownActorPayload(BaseModel):
-    actor_id: str = Field(..., min_length=1)
-    face_template: list[float] = Field(..., min_length=1)
+    actor_id: int = Field(..., ge=1)
+    # Multi-exemplar gallery (each inner list = one 512-d ArcFace embedding).
+    # BE accumulates new angles per actor across rehearsals; the analyzer
+    # matches max-over-N so frontal/profile/makeup variants all contribute.
+    face_templates: list[list[float]] = Field(..., min_length=1)
 
 
 class AnalyzeRequest(BaseModel):

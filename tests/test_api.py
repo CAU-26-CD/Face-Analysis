@@ -59,16 +59,28 @@ def test_analyze_forwards_known_actors(monkeypatch):
             "s3_url": "https://bucket.s3.ap-northeast-2.amazonaws.com/videos/7/v2.webm",
             "callback_url": "https://be.example.com/api/v1/videos/analysis-callback",
             "known_actors": [
-                {"actor_id": "actor_1", "face_template": [0.1, 0.2, 0.3]},
-                {"actor_id": "actor_2", "face_template": [-0.1, 0.0, 0.5]},
+                {"actor_id": 1, "face_templates": [[0.1, 0.2, 0.3]]},
+                {
+                    "actor_id": 2,
+                    "face_templates": [
+                        [-0.1, 0.0, 0.5],
+                        [-0.05, 0.1, 0.4],
+                    ],
+                },
             ],
         },
     )
 
     assert response.status_code == 202
     assert calls[0]["known_actors"] == [
-        {"actor_id": "actor_1", "face_template": [0.1, 0.2, 0.3]},
-        {"actor_id": "actor_2", "face_template": [-0.1, 0.0, 0.5]},
+        {"actor_id": 1, "face_templates": [[0.1, 0.2, 0.3]]},
+        {
+            "actor_id": 2,
+            "face_templates": [
+                [-0.1, 0.0, 0.5],
+                [-0.05, 0.1, 0.4],
+            ],
+        },
     ]
 
 
