@@ -122,6 +122,10 @@ def _build_callback_payload(
             "actor_id": m.actor_id,
             "thumbnail_s3_key": thumbnail_s3_keys.get(m.cluster_id),
             "similarity": m.similarity,
+            # Novel angles from this video, capped + novelty-filtered
+            # by ActorMatcher. BE appends these into the actor's gallery
+            # (oldest-drop on overflow).
+            "new_exemplars": [list(e) for e in m.new_exemplars],
         }
         for m in analysis.matched
     ]
@@ -130,7 +134,8 @@ def _build_callback_payload(
         {
             "temp_index": index,
             "thumbnail_s3_key": thumbnail_s3_keys.get(candidate.cluster_id),
-            "face_embedding": list(candidate.embedding),
+            # Multi-exemplar seed for BE's new actor row.
+            "face_embeddings": [list(e) for e in candidate.embeddings],
             "detection_count": candidate.detection_count,
             "start_seconds": candidate.start_seconds,
             "end_seconds": candidate.end_seconds,
@@ -264,8 +269,11 @@ def _upload_cluster_thumbnails(
 def _parse_known_actors(raw_actors: list[dict]) -> list[KnownActor]:
     return [
         KnownActor(
-            actor_id=str(actor["actor_id"]),
-            face_template=[float(value) for value in actor["face_template"]],
+            actor_id=int(actor["actor_id"]),
+            face_templates=[
+                [float(value) for value in template]
+                for template in actor["face_templates"]
+            ],
         )
         for actor in raw_actors
     ]

@@ -89,25 +89,42 @@ class WithinVideoCluster:
 
 @dataclass(frozen=True)
 class KnownActor:
-    actor_id: str
-    face_template: list[float]
+    """One actor in BE's project gallery.
+
+    ``face_templates`` is a list of 512-d ArcFace embeddings (not a single
+    centroid). BE accumulates new angles into this list across rehearsals so
+    profile/frontal/makeup variants all live side by side; matching is
+    max-over-N cosine, which is far more robust than centroid for poses we
+    haven't averaged together cleanly.
+    """
+
+    actor_id: int
+    face_templates: list[list[float]]
 
 
 @dataclass(frozen=True)
 class MatchedActor:
     cluster_id: str
-    actor_id: str
+    actor_id: int
     similarity: float
+    # Exemplars from *this* video that look like a new angle of this actor
+    # (cosine vs every existing template stays below the novelty bar). BE
+    # appends them into the actor's gallery so the next rehearsal matches
+    # better. Empty list = nothing new worth saving from this cluster.
+    new_exemplars: list[list[float]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class NewActorCandidate:
     cluster_id: str
-    embedding: list[float]
+    # Multi-exemplar gallery seed — BE stores these as the new actor's
+    # initial ``face_embeddings``. Capped on our side so first-insert
+    # doesn't blow past BE's per-actor cap.
+    embeddings: list[list[float]]
     detection_count: int
     start_seconds: float
     end_seconds: float
-    suggested_actor_id: str | None = None
+    suggested_actor_id: int | None = None
     suggested_similarity: float | None = None
 
 

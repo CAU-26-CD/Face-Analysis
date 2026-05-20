@@ -169,9 +169,14 @@ def test_pipeline_keeps_two_people_in_separate_clusters():
     result = _make_analyzer(frames).analyze(Path("dummy.mp4"))
 
     assert len(result.new_candidates) == 2
-    embeddings = sorted([c.embedding for c in result.new_candidates], key=lambda e: e[0])
-    assert embeddings[0][1] == 1.0  # person_b (emb_b: [0,1,0])
-    assert embeddings[1][0] == 1.0  # person_a (emb_a: [1,0,0])
+    # Each candidate now carries a multi-exemplar seed. Compare on the first
+    # exemplar — a steady-state tracklet with one repeated embedding picks
+    # exactly that embedding back out.
+    first_exemplars = sorted(
+        [c.embeddings[0] for c in result.new_candidates], key=lambda e: e[0]
+    )
+    assert first_exemplars[0][1] == 1.0  # person_b (emb_b: [0,1,0])
+    assert first_exemplars[1][0] == 1.0  # person_a (emb_a: [1,0,0])
 
 
 def test_pipeline_drops_unassociated_face_from_identity_but_still_tracks_person():

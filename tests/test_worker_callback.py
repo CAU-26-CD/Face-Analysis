@@ -27,7 +27,7 @@ def test_payload_emits_matched_array_with_actor_id_and_thumbnail():
     result = _make_result(
         appearances=[
             FaceAppearance(
-                person_id="actor_kim",
+                person_id="42",
                 start_seconds=0.0,
                 end_seconds=5.0,
                 detection_count=12,
@@ -36,8 +36,9 @@ def test_payload_emits_matched_array_with_actor_id_and_thumbnail():
         matched=[
             MatchedActor(
                 cluster_id="cluster_0",
-                actor_id="actor_kim",
+                actor_id=42,
                 similarity=0.82,
+                new_exemplars=[[0.1, 0.2, 0.3]],
             )
         ],
         new_candidates=[],
@@ -53,9 +54,10 @@ def test_payload_emits_matched_array_with_actor_id_and_thumbnail():
     assert payload["analysis_status"] == "done"
     assert payload["matched"] == [
         {
-            "actor_id": "actor_kim",
+            "actor_id": 42,
             "thumbnail_s3_key": "thumbnails/27/0.jpg",
             "similarity": 0.82,
+            "new_exemplars": [[0.1, 0.2, 0.3]],
         }
     ]
     assert payload["new_candidates"] == []
@@ -81,18 +83,18 @@ def test_payload_emits_new_candidates_with_temp_index_starting_at_zero():
         new_candidates=[
             NewActorCandidate(
                 cluster_id="cluster_a",
-                embedding=[0.1, 0.2, 0.3],
+                embeddings=[[0.1, 0.2, 0.3]],
                 detection_count=8,
                 start_seconds=1.0,
                 end_seconds=4.0,
             ),
             NewActorCandidate(
                 cluster_id="cluster_b",
-                embedding=[0.4, 0.5, 0.6],
+                embeddings=[[0.4, 0.5, 0.6], [0.45, 0.5, 0.6]],
                 detection_count=15,
                 start_seconds=10.0,
                 end_seconds=15.0,
-                suggested_actor_id="actor_park",
+                suggested_actor_id=7,
                 suggested_similarity=0.45,
             ),
         ],
@@ -111,7 +113,7 @@ def test_payload_emits_new_candidates_with_temp_index_starting_at_zero():
         {
             "temp_index": 0,
             "thumbnail_s3_key": "thumbnails/99/0.jpg",
-            "face_embedding": [0.1, 0.2, 0.3],
+            "face_embeddings": [[0.1, 0.2, 0.3]],
             "detection_count": 8,
             "start_seconds": 1.0,
             "end_seconds": 4.0,
@@ -121,11 +123,11 @@ def test_payload_emits_new_candidates_with_temp_index_starting_at_zero():
         {
             "temp_index": 1,
             "thumbnail_s3_key": "thumbnails/99/1.jpg",
-            "face_embedding": [0.4, 0.5, 0.6],
+            "face_embeddings": [[0.4, 0.5, 0.6], [0.45, 0.5, 0.6]],
             "detection_count": 15,
             "start_seconds": 10.0,
             "end_seconds": 15.0,
-            "suggested_actor_id": "actor_park",
+            "suggested_actor_id": 7,
             "suggested_similarity": 0.45,
         },
     ]
@@ -135,7 +137,7 @@ def test_appearances_use_actor_and_new_prefixed_person_ids():
     result = _make_result(
         appearances=[
             FaceAppearance(
-                person_id="actor_kim",
+                person_id="42",
                 start_seconds=0.0,
                 end_seconds=5.0,
                 detection_count=12,
@@ -150,14 +152,14 @@ def test_appearances_use_actor_and_new_prefixed_person_ids():
         matched=[
             MatchedActor(
                 cluster_id="cluster_1",
-                actor_id="actor_kim",
+                actor_id=42,
                 similarity=0.81,
             )
         ],
         new_candidates=[
             NewActorCandidate(
                 cluster_id="cluster_2",
-                embedding=[0.0, 1.0, 0.0],
+                embeddings=[[0.0, 1.0, 0.0]],
                 detection_count=7,
                 start_seconds=6.0,
                 end_seconds=9.0,
@@ -170,7 +172,7 @@ def test_appearances_use_actor_and_new_prefixed_person_ids():
     )
 
     appearances = payload["analysis_result"]["appearances"]
-    assert [a["person_id"] for a in appearances] == ["actor:actor_kim", "new:0"]
+    assert [a["person_id"] for a in appearances] == ["actor:42", "new:0"]
 
 
 def test_payload_keeps_thumbnail_null_when_upload_skipped():
@@ -180,7 +182,7 @@ def test_payload_keeps_thumbnail_null_when_upload_skipped():
         new_candidates=[
             NewActorCandidate(
                 cluster_id="cluster_0",
-                embedding=[0.0],
+                embeddings=[[0.0]],
                 detection_count=1,
                 start_seconds=0.0,
                 end_seconds=0.0,
