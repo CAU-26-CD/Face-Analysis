@@ -3,18 +3,21 @@ import os
 import platform
 import tempfile
 import unicodedata
-from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
 from app.services.face_analysis.analyzer import FaceVideoAnalyzer
-from app.services.face_analysis.models import KnownActor
+from app.services.face_analysis.models import (
+    FaceAnalysisResult,
+    KnownActor,
+)
 
 logger = logging.getLogger(__name__)
 
 CALLBACK_TIMEOUT_SECONDS = 20.0
+DEFAULT_THUMBNAIL_PREFIX = "thumbnails"
 
 
 def _resolve_accelerator() -> tuple[str | None, list[str] | None]:
@@ -64,6 +67,7 @@ def run_analysis_job(request: dict) -> None:
 def _analyze_video(request: dict) -> dict:
     video_id = int(request["video_id"])
     known_actors = _parse_known_actors(request.get("known_actors", []))
+    requested_thumbnail_dir = request.get("thumbnail_dir")
 
     with tempfile.TemporaryDirectory(prefix="face-analyzer-") as temp_dir:
         video_path = _download_video(
@@ -71,7 +75,7 @@ def _analyze_video(request: dict) -> dict:
             s3_url=str(request["s3_url"]),
             destination_dir=Path(temp_dir),
         )
-        thumbnail_dir = Path("/tmp/face_analyzer") / str(video_id)
+        local_thumbnail_dir = Path(temp_dir) / "thumbnails"
         device, onnx_providers = _resolve_accelerator()
         logger.info(
             "Accelerator: device=%s onnx_providers=%s",
@@ -84,25 +88,177 @@ def _analyze_video(request: dict) -> dict:
         ).analyze(
             video_path,
             known_actors=known_actors,
-            thumbnail_dir=thumbnail_dir,
+            thumbnail_dir=local_thumbnail_dir,
         )
-        logger.info("Saved cluster thumbnails to %s", thumbnail_dir)
 
-        return {
-            "video_id": video_id,
-            "analysis_status": "done",
-            "analysis_result": {
-                "video_path": analysis.video_path,
-                "appearances": [
-                    asdict(appearance)
-                    for appearance in analysis.appearances
-                ],
-                "new_candidates": [
-                    asdict(candidate)
-                    for candidate in analysis.new_candidates
-                ],
-            },
+        thumbnail_s3_keys = _upload_cluster_thumbnails(
+            analysis.cluster_thumbnail_paths,
+            video_id=video_id,
+            thumbnail_dir=requested_thumbnail_dir,
+        )
+        return _build_callback_payload(video_id, analysis, thumbnail_s3_keys)
+
+
+def _build_callback_payload(
+    video_id: int,
+    analysis: FaceAnalysisResult,
+    thumbnail_s3_keys: dict[str, str],
+) -> dict:
+    """Translate the analyzer's internal result into the BE callback contract.
+
+    Two ID namespaces collide here: the analyzer uses cluster_id internally
+    while BE expects ``"actor:{actor_id}"`` / ``"new:{temp_index}"``. We
+    build a cluster_id → temp_index map once for the new-candidate path and
+    derive ``actor:{...}`` directly from the (already actor-keyed) appearance
+    list for the matched path.
+    """
+    new_cluster_to_temp_index: dict[str, int] = {
+        candidate.cluster_id: index
+        for index, candidate in enumerate(analysis.new_candidates)
+    }
+
+    matched_payload = [
+        {
+            "actor_id": m.actor_id,
+            "thumbnail_s3_key": thumbnail_s3_keys.get(m.cluster_id),
+            "similarity": m.similarity,
         }
+        for m in analysis.matched
+    ]
+
+    new_candidates_payload = [
+        {
+            "temp_index": index,
+            "thumbnail_s3_key": thumbnail_s3_keys.get(candidate.cluster_id),
+            "face_embedding": list(candidate.embedding),
+            "detection_count": candidate.detection_count,
+            "start_seconds": candidate.start_seconds,
+            "end_seconds": candidate.end_seconds,
+            "suggested_actor_id": candidate.suggested_actor_id,
+            "suggested_similarity": candidate.suggested_similarity,
+        }
+        for index, candidate in enumerate(analysis.new_candidates)
+    ]
+
+    # `_build_appearances` keys matched clusters by actor_id and new clusters
+    # by cluster_id, so any raw_id we see here is either a temp cluster id
+    # (new candidate) or an actor id (matched). Hitting the new-id map first
+    # disambiguates without caring about which path the analyzer took.
+    appearances_payload = []
+    for appearance in analysis.appearances:
+        raw_id = appearance.person_id
+        if raw_id in new_cluster_to_temp_index:
+            person_id = f"new:{new_cluster_to_temp_index[raw_id]}"
+        else:
+            person_id = f"actor:{raw_id}"
+        appearances_payload.append(
+            {
+                "person_id": person_id,
+                "start_seconds": appearance.start_seconds,
+                "end_seconds": appearance.end_seconds,
+                "detection_count": appearance.detection_count,
+            }
+        )
+
+    return {
+        "video_id": video_id,
+        "analysis_status": "done",
+        "matched": matched_payload,
+        "new_candidates": new_candidates_payload,
+        "analysis_result": {
+            "video_path": analysis.video_path,
+            "appearances": appearances_payload,
+        },
+    }
+
+
+def _upload_cluster_thumbnails(
+    cluster_thumbnail_paths: dict[str, list[str]],
+    video_id: int,
+    thumbnail_dir: str | None = None,
+) -> dict[str, str]:
+    """Upload the top thumbnail per cluster to S3, return cluster_id → key.
+
+    BE-driven layout via ``thumbnail_dir`` (preferred): the caller passes the
+    S3 key prefix it wants thumbnails written under — typically
+    ``"{project_id}/{session_id}/"`` so video + thumbnails sit side by side
+    in one per-session folder. Files land as ``thumb-{idx}.jpg``.
+
+    Legacy fallback (``thumbnail_dir`` is None): keeps the older flat layout
+    ``thumbnails/{video_id}/{idx}.jpg`` so callers that haven't been updated
+    to send the new field still work.
+
+    Silently no-ops when ``S3_BUCKET_NAME`` is unset (local dev path), so the
+    callback can still go out with ``thumbnail_s3_key = None`` for each entry
+    rather than failing the whole analysis. Per-cluster upload failures are
+    logged and dropped from the map for the same reason.
+    """
+    if not cluster_thumbnail_paths:
+        return {}
+
+    bucket_name = os.getenv("S3_THUMBNAIL_BUCKET") or os.getenv("S3_BUCKET_NAME")
+    if not bucket_name:
+        logger.info(
+            "S3_BUCKET_NAME / S3_THUMBNAIL_BUCKET unset; "
+            "thumbnails stay local and thumbnail_s3_key will be null"
+        )
+        return {}
+
+    if thumbnail_dir:
+        # Normalize to exactly one trailing slash, regardless of what BE sent.
+        normalized_dir = thumbnail_dir.rstrip("/") + "/"
+        key_for = lambda idx: f"{normalized_dir}thumb-{idx}.jpg"  # noqa: E731
+        log_prefix = normalized_dir
+    else:
+        legacy_prefix = (
+            os.getenv("S3_THUMBNAIL_PREFIX", DEFAULT_THUMBNAIL_PREFIX).strip("/")
+            or DEFAULT_THUMBNAIL_PREFIX
+        )
+        key_for = lambda idx: f"{legacy_prefix}/{video_id}/{idx}.jpg"  # noqa: E731
+        log_prefix = f"{legacy_prefix}/{video_id}/"
+
+    try:
+        import boto3
+    except ImportError as exc:
+        raise RuntimeError(
+            "boto3 is required for S3 thumbnail uploads. "
+            "Install it with `poetry add boto3`."
+        ) from exc
+
+    region = os.getenv("AWS_REGION")
+    client_kwargs = {"region_name": region} if region else {}
+    client = boto3.client("s3", **client_kwargs)
+
+    uploaded: dict[str, str] = {}
+    for index, (cluster_id, paths) in enumerate(cluster_thumbnail_paths.items()):
+        if not paths:
+            continue
+        best_path = paths[0]
+        s3_key = key_for(index)
+        try:
+            client.upload_file(
+                str(best_path),
+                bucket_name,
+                s3_key,
+                ExtraArgs={"ContentType": "image/jpeg"},
+            )
+        except Exception:
+            logger.exception(
+                "Failed to upload thumbnail for cluster %s to s3://%s/%s",
+                cluster_id,
+                bucket_name,
+                s3_key,
+            )
+            continue
+        uploaded[cluster_id] = s3_key
+    logger.info(
+        "Uploaded %d/%d cluster thumbnails to s3://%s/%s",
+        len(uploaded),
+        len(cluster_thumbnail_paths),
+        bucket_name,
+        log_prefix,
+    )
+    return uploaded
 
 
 def _parse_known_actors(raw_actors: list[dict]) -> list[KnownActor]:

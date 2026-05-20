@@ -145,14 +145,19 @@ class FaceVideoAnalyzer:
 
         tracklets = self._finalize_tracklets(track_buffers)
         clusters = self.tracklet_clusterer.cluster(tracklets)
+        cluster_thumbnail_paths: dict[str, list[str]] = {}
         if thumbnail_dir is not None:
             cropped_faces_by_track = {
                 track_id: buf.cropped_faces
                 for track_id, buf in track_buffers.items()
             }
-            self.thumbnail_extractor.extract(
+            saved = self.thumbnail_extractor.extract(
                 clusters, thumbnail_dir, cropped_faces_by_track
             )
+            cluster_thumbnail_paths = {
+                cluster_id: [str(path) for path in paths]
+                for cluster_id, paths in saved.items()
+            }
         match_result = self.actor_matcher.match(clusters, known_actors)
         appearances = self._build_appearances(clusters, match_result)
 
@@ -160,6 +165,8 @@ class FaceVideoAnalyzer:
             video_path=str(path),
             appearances=appearances,
             new_candidates=match_result.new_candidates,
+            matched=match_result.matched,
+            cluster_thumbnail_paths=cluster_thumbnail_paths,
         )
 
     @staticmethod

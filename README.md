@@ -48,18 +48,25 @@ Request:
 {
   "video_id": 1,
   "session_id": 7,
-  "s3_key": "videos/7/abc123.webm",
-  "s3_url": "https://bucket.s3.ap-northeast-2.amazonaws.com/videos/7/abc123.webm",
+  "s3_key": "42/7/video.webm",
+  "s3_url": "https://bucket.s3.ap-northeast-2.amazonaws.com/42/7/video.webm",
   "callback_url": "https://BE_SERVER/api/v1/videos/analysis-callback",
   "known_actors": [
     { "actor_id": "actor_1", "face_template": [0.12, -0.03, ...] }
-  ]
+  ],
+  "thumbnail_dir": "42/7/"
 }
 ```
 
 `known_actors` is optional (defaults to `[]`). Pass the project's labeled
 actors and their stored face templates so the analyzer can resolve each
 within-video cluster to an existing identity.
+
+`thumbnail_dir` is the S3 key prefix BE wants thumbnails written under. The
+analyzer appends `thumb-{idx}.jpg` so video and thumbnails end up in the
+same per-session folder (e.g. `42/7/video.webm` + `42/7/thumb-0.jpg`,
+`42/7/thumb-1.jpg`, ...). Optional for back-compat: older callers that omit
+the field fall back to the flat `thumbnails/{video_id}/{idx}.jpg` layout.
 
 Immediate response:
 
@@ -76,43 +83,67 @@ Success callback:
 {
   "video_id": 1,
   "analysis_status": "done",
+  "matched": [
+    {
+      "actor_id": "actor_1",
+      "thumbnail_s3_key": "42/7/thumb-0.jpg",
+      "similarity": 0.82
+    }
+  ],
+  "new_candidates": [
+    {
+      "temp_index": 0,
+      "thumbnail_s3_key": "42/7/thumb-1.jpg",
+      "face_embedding": [0.04, 0.21, ...],
+      "detection_count": 8,
+      "start_seconds": 30.0,
+      "end_seconds": 42.0,
+      "suggested_actor_id": null,
+      "suggested_similarity": null
+    }
+  ],
   "analysis_result": {
     "video_path": "...",
     "appearances": [
       {
-        "person_id": "actor_1",
+        "person_id": "actor:actor_1",
         "start_seconds": 15.0,
         "end_seconds": 20.0,
         "detection_count": 3
       },
       {
-        "person_id": "cluster_2",
+        "person_id": "new:0",
         "start_seconds": 30.0,
         "end_seconds": 42.0,
         "detection_count": 8
-      }
-    ],
-    "new_candidates": [
-      {
-        "cluster_id": "cluster_2",
-        "embedding": [0.04, 0.21, ...],
-        "detection_count": 8,
-        "start_seconds": 30.0,
-        "end_seconds": 42.0,
-        "suggested_actor_id": null,
-        "suggested_similarity": null
       }
     ]
   }
 }
 ```
 
-- `appearances[].person_id` is either a known `actor_id` (matched) or a
-  `cluster_X` temp id for newly discovered people.
-- `new_candidates` lists every unmatched cluster with its embedding so BE/UI
-  can prompt the user to label or merge.
+- `matched[]` lists clusters resolved to a known actor. The analyzer uploads
+  the cluster's best thumbnail to S3 (`thumbnails/{video_id}/{idx}.jpg`) and
+  returns the key — BE should keep the existing actor's thumbnail by default
+  (decision: thumbnail is fixed at first sighting), but is free to compare
+  and swap.
+- `new_candidates[]` lists clusters with no confident match. `temp_index`
+  is the within-video ordinal (0, 1, 2, ...) used to refer to the candidate
+  from `appearances`. BE creates a new actor per entry and stores
+  `face_embedding` as the actor's face template (no later averaging — the
+  embedding is fixed at first creation per the agreed policy).
+- `analysis_result.appearances[].person_id` uses one of two prefixes:
+  `"actor:{actor_id}"` for matched clusters or `"new:{temp_index}"` for new
+  candidates. BE substitutes `new:*` with the actual actor_id minted from
+  the corresponding new_candidates entry before persisting.
 - `suggested_actor_id` is non-null when similarity ≥ suggest threshold but
-  below the confident match threshold — surface as "is this <actor>?".
+  below the confident match threshold — surface as "is this <actor>?". The
+  agreed MVP UX skips this chip and lets the user merge manually instead;
+  the field stays in the payload so a future UX iteration can enable it
+  without a contract change.
+- `thumbnail_s3_key` may be `null` if S3 credentials/bucket are unset (local
+  dev) or if a per-cluster upload fails. The rest of the callback still
+  goes out so BE can persist embeddings and timeline data.
 
 Failure callback:
 
@@ -146,12 +177,35 @@ FACE_ANALYZER_ONNX_PROVIDERS=CoreMLExecutionProvider,CPUExecutionProvider
 # Optional — S3 multipart download tuning
 S3_DOWNLOAD_MAX_CONCURRENCY=16
 S3_DOWNLOAD_CHUNKSIZE_MB=16
+
+# Optional — thumbnail upload destination (defaults to S3_BUCKET_NAME)
+S3_THUMBNAIL_BUCKET=your-video-bucket
+S3_THUMBNAIL_PREFIX=thumbnails
 ```
 
 `CALLBACK_SECRET` is also accepted as a fallback for `ANALYZER_SECRET`.
 
 If `S3_BUCKET_NAME` is set, the analyzer downloads with boto3 using `s3_key`.
 If it is not set, it falls back to downloading `s3_url` directly.
+
+### Thumbnail upload
+
+After clustering, the analyzer picks the top-quality face crop per cluster
+and uploads it to S3 (JPEG, content-type `image/jpeg`). The returned key
+shows up as `thumbnail_s3_key` on each `matched` / `new_candidates` entry in
+the callback.
+
+The S3 location is chosen by the request's `thumbnail_dir` field:
+
+- **`thumbnail_dir` provided** (preferred, e.g. `"{project_id}/{session_id}/"`):
+  thumbnails land at `{thumbnail_dir}thumb-{idx}.jpg`, sitting next to the
+  video file BE uploaded to the same folder.
+- **`thumbnail_dir` omitted** (legacy callers): falls back to the flat
+  `{S3_THUMBNAIL_PREFIX or "thumbnails"}/{video_id}/{idx}.jpg` layout.
+
+If neither `S3_BUCKET_NAME` nor `S3_THUMBNAIL_BUCKET` is set, upload is
+skipped entirely and every `thumbnail_s3_key` is `null` — useful for local
+development without S3 write credentials.
 
 ### Accelerator selection
 
@@ -284,24 +338,26 @@ import json, httpx
 with open(\"/tmp/last_callback.json\") as f:
     data = json.load(f)
 
-top = max(data[\"analysis_result\"][\"new_candidates\"], key=lambda c: c[\"detection_count\"])
-print(\"labeling\", top[\"cluster_id\"], \"as actor_kim (n=\" + str(top[\"detection_count\"]) + \")\")
+top = max(data[\"new_candidates\"], key=lambda c: c[\"detection_count\"])
+print(\"labeling temp_index\", top[\"temp_index\"], \"as actor_kim (n=\" + str(top[\"detection_count\"]) + \")\")
 
 r = httpx.post(\"http://127.0.0.1:8000/analyze\", json={
     \"video_id\": 2, \"session_id\": 2,
     \"s3_key\": \"<S3 object key>\",
     \"s3_url\": \"<S3 object URL>\",
     \"callback_url\": \"http://localhost:9000/cb\",
-    \"known_actors\": [{\"actor_id\": \"actor_kim\", \"face_template\": top[\"embedding\"]}],
+    \"known_actors\": [{\"actor_id\": \"actor_kim\", \"face_template\": top[\"face_embedding\"]}],
 })
 print(r.status_code, r.json())
 """)'
 ```
 
 Pass criteria:
-- The newly labeled cluster's intervals in `appearances` switch from
-  `cluster_X` to `actor_kim`.
-- That cluster is removed from `new_candidates`.
+- The newly labeled cluster now appears in the top-level `matched[]` array
+  with `actor_id="actor_kim"`.
+- That cluster is no longer present in `new_candidates[]`.
+- The corresponding `appearances[]` entry's `person_id` is now
+  `"actor:actor_kim"` instead of `"new:N"`.
 - Other clusters remain as candidates.
 
 ### Troubleshooting
@@ -320,12 +376,29 @@ Pass criteria:
 The BE server should:
 
 1. Upload the video to S3 and store `s3_key` / `s3_url`.
-2. Call analyzer `POST /analyze` with the project's `known_actors`.
+2. Load every persisted actor for the video's project and call analyzer
+   `POST /analyze` with that list as `known_actors`.
 3. Receive the callback and validate `X-Analyzer-Secret`.
-4. Update `videos.analysis_status` and `videos.analysis_result`.
-5. Surface `new_candidates` to the user for labeling, then persist the
-   resulting `(actor_id, face_template)` rows into the project gallery so
-   they are passed back as `known_actors` on subsequent `/analyze` calls.
+4. For each `matched[]` entry: insert a `video_actors(video_id, actor_id)`
+   link with `is_new_in_video=False`. Do not update the actor's stored
+   embedding or thumbnail (both are fixed at first sighting).
+5. For each `new_candidates[]` entry: INSERT a new `actors` row using
+   `face_embedding` + `thumbnail_s3_key`, name it `'배우 ' || actor_id` once
+   the SERIAL id is known, and insert a `video_actors` link with
+   `is_new_in_video=True`. Record the mapping `temp_index → actor_id` so the
+   next step can rewrite `appearances`.
+6. Substitute every `appearances[].person_id` of the form `"new:{idx}"`
+   with `"actor:{actor_id}"` using the mapping from step 5 before storing
+   `analysis_result`.
+7. On re-analysis of an existing video: delete the video's existing
+   `video_actors` rows first, then call `/analyze` as usual. After the new
+   callback is processed, run a cleanup pass that deletes any project
+   actors whose name still matches the auto-generated `'배우 \\d+'` pattern
+   and have zero `video_actors` links — this removes the orphans from the
+   replaced analysis without touching actors the user has named.
+
+`suggested_actor_id` is informational and may be ignored by the MVP UI;
+the analyzer keeps populating it for a future "is this <actor>?" chip.
 
 ## Migration notes (MOT redesign)
 
