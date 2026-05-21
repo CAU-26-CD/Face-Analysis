@@ -374,5 +374,12 @@ def _post_callback(callback_url: str, payload: dict) -> None:
             timeout=CALLBACK_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            "Callback rejected by %s (status %d): %s",
+            callback_url,
+            exc.response.status_code,
+            exc.response.text,
+        )
     except Exception:
         logger.exception("Failed to post face analysis callback to %s", callback_url)
