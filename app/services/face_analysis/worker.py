@@ -47,12 +47,15 @@ def _resolve_accelerator() -> tuple[str | None, list[str] | None]:
     return device, providers
 
 
-def run_analysis_job(request: dict) -> None:
+def run_analysis_job(
+    request: dict,
+    analyzer: FaceVideoAnalyzer | None = None,
+) -> None:
     video_id = int(request["video_id"])
     callback_url = str(request["callback_url"])
 
     try:
-        payload = _analyze_video(request)
+        payload = _analyze_video(request, analyzer=analyzer)
     except Exception as exc:
         logger.exception("Face analysis failed for video_id=%s", video_id)
         payload = {
@@ -64,7 +67,10 @@ def run_analysis_job(request: dict) -> None:
     _post_callback(callback_url, payload)
 
 
-def _analyze_video(request: dict) -> dict:
+def _analyze_video(
+    request: dict,
+    analyzer: FaceVideoAnalyzer | None = None,
+) -> dict:
     video_id = int(request["video_id"])
     known_actors = _parse_known_actors(request.get("known_actors", []))
     requested_thumbnail_dir = request.get("thumbnail_dir")
@@ -76,16 +82,18 @@ def _analyze_video(request: dict) -> dict:
             destination_dir=Path(temp_dir),
         )
         local_thumbnail_dir = Path(temp_dir) / "thumbnails"
-        device, onnx_providers = _resolve_accelerator()
-        logger.info(
-            "Accelerator: device=%s onnx_providers=%s",
-            device or "cpu",
-            onnx_providers or ["CPUExecutionProvider"],
-        )
-        analysis = FaceVideoAnalyzer(
-            device=device,
-            onnx_providers=onnx_providers,
-        ).analyze(
+        if analyzer is None:
+            device, onnx_providers = _resolve_accelerator()
+            logger.info(
+                "Accelerator: device=%s onnx_providers=%s",
+                device or "cpu",
+                onnx_providers or ["CPUExecutionProvider"],
+            )
+            analyzer = FaceVideoAnalyzer(
+                device=device,
+                onnx_providers=onnx_providers,
+            )
+        analysis = analyzer.analyze(
             video_path,
             known_actors=known_actors,
             thumbnail_dir=local_thumbnail_dir,

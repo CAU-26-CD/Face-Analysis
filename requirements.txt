@@ -10,3 +10,4 @@ opencv-python==4.13.0.92
 insightface==0.7.3
 onnxruntime-gpu>=1.25.1,<2.0.0
 ultralytics>=8.4.51,<9.0.0
+runpod>=1.7.0,<2.0.0
