@@ -28,8 +28,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+# Install CUDA-enabled torch from the cu124 wheel index (matches the base
+# image's CUDA 12.4 runtime). Kept separate from requirements.txt so newer
+# pip versions don't choke on +local version pins.
 RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cu124 \
+        torch torchvision \
     && pip install --no-cache-dir -r requirements.txt
+
+# Pre-fetch InsightFace buffalo_l weights so cold starts skip the ~250MB
+# download. ctx_id=-1 / CPUExecutionProvider avoids needing CUDA at build time.
+RUN python -c "from insightface.app import FaceAnalysis; \
+FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'], allowed_modules=['detection','recognition'])"
 
 COPY yolo11s.pt ./
 COPY app ./app
