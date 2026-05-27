@@ -3,6 +3,7 @@ import os
 import platform
 import tempfile
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -242,12 +243,14 @@ def _upload_cluster_thumbnails(
     client_kwargs = {"region_name": region} if region else {}
     client = boto3.client("s3", **client_kwargs)
 
-    uploaded: dict[str, str] = {}
-    for index, (cluster_id, paths) in enumerate(cluster_thumbnail_paths.items()):
-        if not paths:
-            continue
-        best_path = paths[0]
-        s3_key = key_for(index)
+    work = [
+        (cluster_id, key_for(index), paths[0])
+        for index, (cluster_id, paths) in enumerate(cluster_thumbnail_paths.items())
+        if paths
+    ]
+
+    def _upload_one(item: tuple[str, str, str]) -> tuple[str, str] | None:
+        cluster_id, s3_key, best_path = item
         try:
             client.upload_file(
                 str(best_path),
@@ -262,8 +265,17 @@ def _upload_cluster_thumbnails(
                 bucket_name,
                 s3_key,
             )
-            continue
-        uploaded[cluster_id] = s3_key
+            return None
+        return cluster_id, s3_key
+
+    uploaded: dict[str, str] = {}
+    if work:
+        with ThreadPoolExecutor(max_workers=min(8, len(work))) as pool:
+            for result in pool.map(_upload_one, work):
+                if result is None:
+                    continue
+                cluster_id, s3_key = result
+                uploaded[cluster_id] = s3_key
     logger.info(
         "Uploaded %d/%d cluster thumbnails to s3://%s/%s",
         len(uploaded),
