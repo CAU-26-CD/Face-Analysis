@@ -38,6 +38,14 @@ from app.services.face_analysis.video_reader import VideoFrameReader
 # end-of-job video reopen + keyframe seek.
 MAX_CROPS_PER_TRACK = 20
 
+# Per-track cap on face observations. Once every currently-visible track has
+# this many face detections, we skip the InsightFace pass on that frame —
+# detection runs at fixed 640×640 regardless of the input, so on long single-
+# person tracks the model burns most of its frames recomputing the same face.
+# 50 leaves comfortable headroom over the 10 exemplars we keep per cluster
+# and over the ~30 samples it takes the mean embedding to stabilize.
+MAX_FACE_OBS_PER_TRACK = 50
+
 
 @dataclass
 class _TrackBuffer:
@@ -118,6 +126,7 @@ class FaceVideoAnalyzer:
 
         self.person_tracker.reset()
         track_buffers: dict[str, _TrackBuffer] = {}
+        face_obs_count: dict[str, int] = {}
 
         want_crops = thumbnail_dir is not None
         padding_ratio = self.thumbnail_extractor.padding_ratio if want_crops else 0.0
@@ -128,8 +137,21 @@ class FaceVideoAnalyzer:
         ):
             person_detections = self.person_detector.detect(video_frame)
             tracked_persons = self.person_tracker.update(video_frame, person_detections)
-            face_detections = self.face_detector.detect(video_frame)
-            tracked_faces = self.face_associator.associate(face_detections, tracked_persons)
+
+            # Only run InsightFace when at least one visible track still
+            # needs more face observations. On a stable 1-person track this
+            # cuts ~90% of face detection calls without hurting embedding or
+            # exemplar quality.
+            needs_face_pass = any(
+                face_obs_count.get(p.track_id, 0) < MAX_FACE_OBS_PER_TRACK
+                for p in tracked_persons
+            )
+            if needs_face_pass:
+                face_detections = self.face_detector.detect(video_frame)
+                tracked_faces = self.face_associator.associate(face_detections, tracked_persons)
+            else:
+                face_detections = []
+                tracked_faces = []
 
             self._record_persons(tracked_persons, track_buffers)
             self._record_faces(
@@ -138,6 +160,11 @@ class FaceVideoAnalyzer:
                 frame=video_frame.frame if want_crops else None,
                 padding_ratio=padding_ratio,
             )
+            for tracked_face in tracked_faces:
+                if tracked_face.person_track_id is not None:
+                    face_obs_count[tracked_face.person_track_id] = (
+                        face_obs_count.get(tracked_face.person_track_id, 0) + 1
+                    )
 
             if progress_callback is not None:
                 progress_callback(
