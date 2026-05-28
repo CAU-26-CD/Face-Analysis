@@ -42,7 +42,10 @@ RUN pip install --no-cache-dir --upgrade pip \
 RUN python -c "from insightface.app import FaceAnalysis; \
 FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'], allowed_modules=['detection','recognition'])"
 
-COPY yolo11s.pt ./
+# Pre-fetch YOLO weights into the image so the file is present without being
+# tracked in git. Ultralytics downloads to the CWD on first use.
+RUN python -c "from ultralytics import YOLO; YOLO('yolo11s.pt')"
+
 COPY app ./app
 
 CMD ["python", "-u", "-m", "app.handler"]
