@@ -64,6 +64,11 @@ class _ScriptedPersonDetector:
             for _track_id, bbox in script.persons
         ]
 
+    def detect_batch(
+        self, video_frames: list[VideoFrame]
+    ) -> list[list[PersonDetection]]:
+        return [self.detect(frame) for frame in video_frames]
+
 
 class _ScriptedPersonTracker:
     """Returns track ids exactly as the script dictates — bypasses real

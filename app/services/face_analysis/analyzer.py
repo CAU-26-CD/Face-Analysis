@@ -46,6 +46,12 @@ MAX_CROPS_PER_TRACK = 20
 # and over the ~30 samples it takes the mean embedding to stabilize.
 MAX_FACE_OBS_PER_TRACK = 50
 
+# How many sampled frames to push through YOLO at once. Single-frame predict
+# leaves the GPU idle between kernel launches; batches of 8 keep utilization
+# high without blowing GPU memory on 1080p/4K inputs. Tracker still consumes
+# frames in order — only the YOLO call is batched.
+YOLO_BATCH_SIZE = 8
+
 
 @dataclass
 class _TrackBuffer:
@@ -131,48 +137,58 @@ class FaceVideoAnalyzer:
         want_crops = thumbnail_dir is not None
         padding_ratio = self.thumbnail_extractor.padding_ratio if want_crops else 0.0
 
-        for sampled_frame_count, video_frame in enumerate(
-            self.frame_reader.read_frames(path),
-            start=1,
+        sampled_frame_count = 0
+        for frame_batch in _batched(
+            self.frame_reader.read_frames(path), YOLO_BATCH_SIZE
         ):
-            person_detections = self.person_detector.detect(video_frame)
-            tracked_persons = self.person_tracker.update(video_frame, person_detections)
-
-            # Only run InsightFace when at least one visible track still
-            # needs more face observations. On a stable 1-person track this
-            # cuts ~90% of face detection calls without hurting embedding or
-            # exemplar quality.
-            needs_face_pass = any(
-                face_obs_count.get(p.track_id, 0) < MAX_FACE_OBS_PER_TRACK
-                for p in tracked_persons
+            person_detections_per_frame = self.person_detector.detect_batch(
+                frame_batch
             )
-            if needs_face_pass:
-                face_detections = self.face_detector.detect(video_frame)
-                tracked_faces = self.face_associator.associate(face_detections, tracked_persons)
-            else:
-                face_detections = []
-                tracked_faces = []
-
-            self._record_persons(tracked_persons, track_buffers)
-            self._record_faces(
-                tracked_faces,
-                track_buffers,
-                frame=video_frame.frame if want_crops else None,
-                padding_ratio=padding_ratio,
-            )
-            for tracked_face in tracked_faces:
-                if tracked_face.person_track_id is not None:
-                    face_obs_count[tracked_face.person_track_id] = (
-                        face_obs_count.get(tracked_face.person_track_id, 0) + 1
-                    )
-
-            if progress_callback is not None:
-                progress_callback(
-                    sampled_frame_count,
-                    video_frame.timestamp_seconds,
-                    len(tracked_persons),
-                    len(face_detections),
+            for video_frame, person_detections in zip(
+                frame_batch, person_detections_per_frame
+            ):
+                sampled_frame_count += 1
+                tracked_persons = self.person_tracker.update(
+                    video_frame, person_detections
                 )
+
+                # Only run InsightFace when at least one visible track still
+                # needs more face observations. On a stable 1-person track this
+                # cuts ~90% of face detection calls without hurting embedding or
+                # exemplar quality.
+                needs_face_pass = any(
+                    face_obs_count.get(p.track_id, 0) < MAX_FACE_OBS_PER_TRACK
+                    for p in tracked_persons
+                )
+                if needs_face_pass:
+                    face_detections = self.face_detector.detect(video_frame)
+                    tracked_faces = self.face_associator.associate(
+                        face_detections, tracked_persons
+                    )
+                else:
+                    face_detections = []
+                    tracked_faces = []
+
+                self._record_persons(tracked_persons, track_buffers)
+                self._record_faces(
+                    tracked_faces,
+                    track_buffers,
+                    frame=video_frame.frame if want_crops else None,
+                    padding_ratio=padding_ratio,
+                )
+                for tracked_face in tracked_faces:
+                    if tracked_face.person_track_id is not None:
+                        face_obs_count[tracked_face.person_track_id] = (
+                            face_obs_count.get(tracked_face.person_track_id, 0) + 1
+                        )
+
+                if progress_callback is not None:
+                    progress_callback(
+                        sampled_frame_count,
+                        video_frame.timestamp_seconds,
+                        len(tracked_persons),
+                        len(face_detections),
+                    )
 
         tracklets = self._finalize_tracklets(track_buffers)
         clusters = self.tracklet_clusterer.cluster(tracklets)
@@ -302,6 +318,26 @@ class FaceVideoAnalyzer:
         for person_id, timestamp in labeled_timestamps:
             timeline_builder.add(person_id, timestamp)
         return timeline_builder.build()
+
+
+def _batched(
+    iterable: Iterator[VideoFrame], size: int
+) -> Iterator[list[VideoFrame]]:
+    """Yield consecutive ``size``-element chunks from ``iterable``.
+
+    Stdlib ``itertools.batched`` is 3.12+ only, and we want to keep working
+    on 3.11 in dev. The last batch may be shorter.
+    """
+    if size < 1:
+        raise ValueError("size must be >= 1")
+    batch: list[VideoFrame] = []
+    for item in iterable:
+        batch.append(item)
+        if len(batch) >= size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 def _mean_embedding(embeddings: list[list[float]]) -> list[float]:

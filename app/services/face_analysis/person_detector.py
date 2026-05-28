@@ -15,7 +15,7 @@ class PersonDetector:
 
     def __init__(
         self,
-        model_name: str = "yolo11s.pt",
+        model_name: str = "yolo11n.pt",
         confidence_threshold: float = 0.4,
         min_bbox_side_pixels: float = 0.0,
         device: str | None = None,
@@ -34,39 +34,56 @@ class PersonDetector:
         self._model: Any = None
 
     def detect(self, video_frame: VideoFrame) -> list[PersonDetection]:
+        return self.detect_batch([video_frame])[0]
+
+    def detect_batch(
+        self, video_frames: list[VideoFrame]
+    ) -> list[list[PersonDetection]]:
+        """Run YOLO on a batch of frames at once.
+
+        Single-frame inference leaves the GPU mostly idle between kernel
+        launches; batching amortizes that overhead so utilization stays high
+        on long videos. Per-frame order is preserved so the tracker downstream
+        still sees frames in the order they were read.
+        """
+        if not video_frames:
+            return []
+
         model = self._get_model()
         results = model.predict(
-            video_frame.frame,
+            [frame.frame for frame in video_frames],
             classes=[PERSON_CLASS_INDEX],
             conf=self.confidence_threshold,
             imgsz=self.imgsz,
             verbose=False,
             device=self.device,
         )
-        if not results:
-            return []
-        result = results[0]
-        boxes = getattr(result, "boxes", None)
-        if boxes is None or len(boxes) == 0:
-            return []
 
-        xyxy = boxes.xyxy.cpu().numpy()
-        conf = boxes.conf.cpu().numpy()
-
-        detections: list[PersonDetection] = []
-        for i in range(len(xyxy)):
-            x1, y1, x2, y2 = (float(v) for v in xyxy[i])
-            if min(x2 - x1, y2 - y1) < self.min_bbox_side_pixels:
+        per_frame: list[list[PersonDetection]] = []
+        for video_frame, result in zip(video_frames, results):
+            boxes = getattr(result, "boxes", None)
+            if boxes is None or len(boxes) == 0:
+                per_frame.append([])
                 continue
-            detections.append(
-                PersonDetection(
-                    timestamp_seconds=float(video_frame.timestamp_seconds),
-                    frame_index=int(video_frame.frame_index),
-                    bbox=(x1, y1, x2, y2),
-                    confidence=float(conf[i]),
+
+            xyxy = boxes.xyxy.cpu().numpy()
+            conf = boxes.conf.cpu().numpy()
+
+            detections: list[PersonDetection] = []
+            for i in range(len(xyxy)):
+                x1, y1, x2, y2 = (float(v) for v in xyxy[i])
+                if min(x2 - x1, y2 - y1) < self.min_bbox_side_pixels:
+                    continue
+                detections.append(
+                    PersonDetection(
+                        timestamp_seconds=float(video_frame.timestamp_seconds),
+                        frame_index=int(video_frame.frame_index),
+                        bbox=(x1, y1, x2, y2),
+                        confidence=float(conf[i]),
+                    )
                 )
-            )
-        return detections
+            per_frame.append(detections)
+        return per_frame
 
     def _get_model(self):
         if self._model is not None:

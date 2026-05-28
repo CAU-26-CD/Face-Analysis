@@ -44,7 +44,7 @@ FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'], allowed_modul
 
 # Pre-fetch YOLO weights into the image so the file is present without being
 # tracked in git. Ultralytics downloads to the CWD on first use.
-RUN python -c "from ultralytics import YOLO; YOLO('yolo11s.pt')"
+RUN python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
 
 COPY app ./app
 

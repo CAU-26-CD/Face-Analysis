@@ -8,4 +8,5 @@ insightface==0.7.3
 onnxruntime-gpu>=1.25.1,<2.0.0
 ultralytics>=8.4.51,<9.0.0
 lap>=0.5.12
+decord>=0.6.0,<1.0.0
 runpod>=1.7.0,<2.0.0
