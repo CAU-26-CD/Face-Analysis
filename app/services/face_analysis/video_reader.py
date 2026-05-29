@@ -1,5 +1,6 @@
 import logging
 import os
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -33,15 +34,33 @@ class VideoFrameReader:
         try:
             import decord  # noqa: F401
         except ImportError:
-            return self._read_with_opencv(path)
+            yield from self._read_with_opencv(path)
+            return
 
+        # 1st try: original file with decord (covers mp4 and well-formed webm)
         try:
             yield from self._read_with_decord(path, use_gpu=use_gpu)
+            return
         except Exception as exc:
-            logger.warning(
-                "decord read failed (%s); falling back to OpenCV", exc
-            )
-            yield from self._read_with_opencv(path)
+            logger.warning("decord read failed (%s); attempting ffmpeg remux", exc)
+
+        # 2nd try: ffmpeg remux to rebuild container metadata, then decord again.
+        # MediaRecorder-produced webm often has no duration / cue index, which
+        # makes decord throw on probe before NVDEC ever touches the file. A
+        # stream-copy remux is fast (no re-encode) and lets us keep NVDEC.
+        remuxed = self._remux_for_decord(path)
+        if remuxed is not None:
+            try:
+                yield from self._read_with_decord(remuxed, use_gpu=use_gpu)
+                return
+            except Exception as exc:
+                logger.warning(
+                    "decord still failed after remux (%s); falling back to OpenCV",
+                    exc,
+                )
+
+        # Last resort: software decode every frame on CPU.
+        yield from self._read_with_opencv(path)
 
     def _read_with_decord(self, path: Path, use_gpu: bool) -> Iterator[VideoFrame]:
         from decord import VideoReader, cpu, gpu
@@ -71,6 +90,44 @@ class VideoFrameReader:
                 frame_index=int(frame_index),
                 frame=frame_bgr,
             )
+
+    def _remux_for_decord(self, path: Path) -> Path | None:
+        """Stream-copy the video into a fresh MP4 so decord can probe it.
+
+        Returns the remuxed path on success, or None when ffmpeg isn't
+        available / the remux fails — callers fall back to OpenCV in that case.
+        Uses -c copy so this is bandwidth, not CPU, bound: a 5-min 1080p
+        webm remuxes in ~1-2s vs. the ~30-50s OpenCV decode it saves.
+        """
+        remuxed = path.with_suffix(".remuxed.mp4")
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-fflags",
+                    "+genpts",
+                    "-i",
+                    str(path),
+                    "-c",
+                    "copy",
+                    str(remuxed),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
+        except FileNotFoundError:
+            logger.warning("ffmpeg not available; skipping remux step")
+            return None
+        except subprocess.TimeoutExpired:
+            logger.warning("ffmpeg remux timed out")
+            return None
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+            logger.warning("ffmpeg remux failed: %s", stderr.strip().splitlines()[-1] if stderr else exc)
+            return None
+        return remuxed
 
     def _read_with_opencv(self, path: Path) -> Iterator[VideoFrame]:
         try:
