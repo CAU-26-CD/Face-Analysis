@@ -7,6 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV NO_ALBUMENTATIONS_UPDATE=1
 ENV DEBIAN_FRONTEND=noninteractive
+# Remuxed MKV from browser MediaRecorder webm sometimes has a trailing block
+# decord struggles to seek past. Decord literally tells us to raise this
+# (default 10240) when it hits the cap, so we bump it 4x. Has no effect on
+# well-formed files.
+ENV DECORD_EOF_RETRY_MAX=40960
 
 WORKDIR /app
 
