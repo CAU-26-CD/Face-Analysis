@@ -28,6 +28,7 @@ RUN apt-get update \
         cmake \
         git \
         pkg-config \
+        ffmpeg \
         libavcodec-dev \
         libavfilter-dev \
         libavformat-dev \
