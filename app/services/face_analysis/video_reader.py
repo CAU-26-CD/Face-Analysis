@@ -92,42 +92,76 @@ class VideoFrameReader:
             )
 
     def _remux_for_decord(self, path: Path) -> Path | None:
-        """Stream-copy the video into a fresh MP4 so decord can probe it.
+        """Rebuild the video container so decord can probe it.
 
-        Returns the remuxed path on success, or None when ffmpeg isn't
-        available / the remux fails — callers fall back to OpenCV in that case.
-        Uses -c copy so this is bandwidth, not CPU, bound: a 5-min 1080p
-        webm remuxes in ~1-2s vs. the ~30-50s OpenCV decode it saves.
+        Browser MediaRecorder webm is typically VP8/VP9 video + Opus audio,
+        and the duration index is often missing. We try two strategies, in
+        order of cost:
+
+        1. **Stream-copy into MKV, video-only.** MKV accepts VP8/VP9 directly
+           (MP4 doesn't accept VP8), and dropping the audio sidesteps the
+           Opus-in-MP4 compatibility headache. ~1-2s for a 5-min 1080p clip.
+        2. **Fast re-encode to H.264 MP4.** Last resort when stream-copy
+           rejects the source outright (truly broken container, exotic
+           codec). libx264 ultrafast at CRF 30 is fine for face detection
+           — we only need landmarks, not visual fidelity. ~5-10x realtime.
+
+        Returns the path to whichever attempt succeeded, or None when both
+        fail (caller falls back to OpenCV).
         """
-        remuxed = path.with_suffix(".remuxed.mp4")
+        # Strategy 1: MKV stream-copy, video only
+        mkv_out = path.with_suffix(".video.mkv")
+        if self._run_ffmpeg(
+            [
+                "ffmpeg", "-y",
+                "-err_detect", "ignore_err",
+                "-fflags", "+genpts",
+                "-i", str(path),
+                "-map", "0:v:0",
+                "-c:v", "copy",
+                "-an",
+                str(mkv_out),
+            ],
+            timeout=60,
+            description="MKV stream-copy remux",
+        ):
+            return mkv_out
+
+        # Strategy 2: re-encode video to H.264 MP4
+        mp4_out = path.with_suffix(".reenc.mp4")
+        if self._run_ffmpeg(
+            [
+                "ffmpeg", "-y",
+                "-i", str(path),
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "30",
+                "-an",
+                str(mp4_out),
+            ],
+            timeout=300,
+            description="H.264 re-encode",
+        ):
+            return mp4_out
+
+        return None
+
+    @staticmethod
+    def _run_ffmpeg(cmd: list[str], timeout: int, description: str) -> bool:
         try:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-fflags",
-                    "+genpts",
-                    "-i",
-                    str(path),
-                    "-c",
-                    "copy",
-                    str(remuxed),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=60,
-            )
+            subprocess.run(cmd, check=True, capture_output=True, timeout=timeout)
+            return True
         except FileNotFoundError:
-            logger.warning("ffmpeg not available; skipping remux step")
-            return None
+            logger.warning("ffmpeg not available; %s skipped", description)
+            return False
         except subprocess.TimeoutExpired:
-            logger.warning("ffmpeg remux timed out")
-            return None
+            logger.warning("%s timed out", description)
+            return False
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
-            logger.warning("ffmpeg remux failed: %s", stderr.strip().splitlines()[-1] if stderr else exc)
-            return None
-        return remuxed
+            tail = "\n".join(stderr.strip().splitlines()[-3:]) if stderr else str(exc)
+            logger.warning("%s failed:\n%s", description, tail)
+            return False
 
     def _read_with_opencv(self, path: Path) -> Iterator[VideoFrame]:
         try:
