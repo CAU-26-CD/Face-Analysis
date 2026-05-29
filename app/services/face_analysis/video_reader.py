@@ -37,30 +37,33 @@ class VideoFrameReader:
             yield from self._read_with_opencv(path)
             return
 
-        # 1st try: original file with decord (covers mp4 and well-formed webm)
-        try:
-            yield from self._read_with_decord(path, use_gpu=use_gpu)
-            return
-        except Exception as exc:
-            logger.warning("decord read failed (%s); attempting ffmpeg remux", exc)
-
-        # 2nd try: ffmpeg remux to rebuild container metadata, then decord again.
-        # MediaRecorder-produced webm often has no duration / cue index, which
-        # makes decord throw on probe before NVDEC ever touches the file. A
-        # stream-copy remux is fast (no re-encode) and lets us keep NVDEC.
-        remuxed = self._remux_for_decord(path)
-        if remuxed is not None:
+        # Try decord on the original, then on each ffmpeg-fixed variant in
+        # cost order. We keep advancing past the previous failure instead of
+        # bailing out, because MediaRecorder webm tends to fail on the
+        # original *and* the cheap MKV remux — only the re-encode produces a
+        # file with clean keyframes / EOF markers.
+        for attempt, source in self._decord_attempts(path):
+            if source is None:
+                continue
             try:
-                yield from self._read_with_decord(remuxed, use_gpu=use_gpu)
+                yield from self._read_with_decord(source, use_gpu=use_gpu)
                 return
             except Exception as exc:
                 logger.warning(
-                    "decord still failed after remux (%s); falling back to OpenCV",
+                    "decord failed on %s (%s); trying next strategy",
+                    attempt,
                     exc,
                 )
 
         # Last resort: software decode every frame on CPU.
+        logger.warning("all decord strategies failed; falling back to OpenCV")
         yield from self._read_with_opencv(path)
+
+    def _decord_attempts(self, path: Path) -> Iterator[tuple[str, Path | None]]:
+        """Yield (label, path) pairs for each decord attempt, in cost order."""
+        yield "original", path
+        yield "MKV stream-copy", self._remux_mkv(path)
+        yield "H.264 re-encode", self._reencode_h264(path)
 
     def _read_with_decord(self, path: Path, use_gpu: bool) -> Iterator[VideoFrame]:
         from decord import VideoReader, cpu, gpu
@@ -91,25 +94,15 @@ class VideoFrameReader:
                 frame=frame_bgr,
             )
 
-    def _remux_for_decord(self, path: Path) -> Path | None:
-        """Rebuild the video container so decord can probe it.
+    def _remux_mkv(self, path: Path) -> Path | None:
+        """Stream-copy video into MKV with no audio. ~1-2s for 5-min 1080p.
 
-        Browser MediaRecorder webm is typically VP8/VP9 video + Opus audio,
-        and the duration index is often missing. We try two strategies, in
-        order of cost:
-
-        1. **Stream-copy into MKV, video-only.** MKV accepts VP8/VP9 directly
-           (MP4 doesn't accept VP8), and dropping the audio sidesteps the
-           Opus-in-MP4 compatibility headache. ~1-2s for a 5-min 1080p clip.
-        2. **Fast re-encode to H.264 MP4.** Last resort when stream-copy
-           rejects the source outright (truly broken container, exotic
-           codec). libx264 ultrafast at CRF 30 is fine for face detection
-           — we only need landmarks, not visual fidelity. ~5-10x realtime.
-
-        Returns the path to whichever attempt succeeded, or None when both
-        fail (caller falls back to OpenCV).
+        MKV accepts VP8/VP9 directly (MP4 rejects VP8), and dropping audio
+        sidesteps the Opus-in-MP4 compatibility headache. Works on most
+        MediaRecorder webm — but the resulting MKV sometimes still trips
+        decord at EOF (broken trailer), in which case the caller advances
+        to the re-encode path.
         """
-        # Strategy 1: MKV stream-copy, video only
         mkv_out = path.with_suffix(".video.mkv")
         if self._run_ffmpeg(
             [
@@ -126,8 +119,16 @@ class VideoFrameReader:
             description="MKV stream-copy remux",
         ):
             return mkv_out
+        return None
 
-        # Strategy 2: re-encode video to H.264 MP4
+    def _reencode_h264(self, path: Path) -> Path | None:
+        """Re-encode video to H.264 MP4 with libx264 ultrafast, no audio.
+
+        Slower than stream-copy (~5-10x realtime), but produces a file with
+        clean keyframes and a valid moov atom, so decord can always seek
+        and probe it. CRF 30 ultrafast loses visual fidelity, but face
+        landmarks survive well — better than the OpenCV CPU fallback.
+        """
         mp4_out = path.with_suffix(".reenc.mp4")
         if self._run_ffmpeg(
             [
@@ -137,13 +138,13 @@ class VideoFrameReader:
                 "-preset", "ultrafast",
                 "-crf", "30",
                 "-an",
+                "-movflags", "+faststart",
                 str(mp4_out),
             ],
             timeout=300,
             description="H.264 re-encode",
         ):
             return mp4_out
-
         return None
 
     @staticmethod
