@@ -98,6 +98,14 @@ RUN git clone --recursive --depth 1 https://github.com/dmlc/decord /tmp/decord \
     && pip install --no-cache-dir . \
     && cd / && rm -rf /tmp/decord
 
+# CRITICAL: delete the build-time libnvcuvid stub. If we leave it in place
+# ldconfig keeps it registered for `libnvcuvid.so.1` lookups, and decord
+# silently calls the no-op stub at runtime instead of the real driver lib
+# mounted by nvidia-container-toolkit at /usr/lib/x86_64-linux-gnu/. Every
+# cuvid* call returns 0, decord thinks the decoder is fine, and we get
+# `Unable to handle EOF` because no frames ever arrive.
+RUN rm -f /usr/local/cuda/lib64/libnvcuvid.so && ldconfig
+
 # Pre-fetch InsightFace buffalo_l weights so cold starts skip the ~250MB
 # download. ctx_id=-1 / CPUExecutionProvider avoids needing CUDA at build time.
 RUN python -c "from insightface.app import FaceAnalysis; \
