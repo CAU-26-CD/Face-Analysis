@@ -60,10 +60,16 @@ class VideoFrameReader:
         yield from self._read_with_opencv(path)
 
     def _decord_attempts(self, path: Path) -> Iterator[tuple[str, Path | None]]:
-        """Yield (label, path) pairs for each decord attempt, in cost order."""
+        """Yield (label, path) pairs for each decord attempt, in cost order.
+
+        We *don't* try the H.264 re-encode here even though the method still
+        exists: in practice decord/NVDEC still trips the EOF retry cap on the
+        re-encoded MP4 (observed on MediaRecorder webm sources), and the
+        re-encode itself runs ~30s per minute of video. Burning that time on
+        a path that fails anyway is worse than falling straight to OpenCV.
+        """
         yield "original", path
         yield "MKV stream-copy", self._remux_mkv(path)
-        yield "H.264 re-encode", self._reencode_h264(path)
 
     def _read_with_decord(self, path: Path, use_gpu: bool) -> Iterator[VideoFrame]:
         from decord import VideoReader, cpu, gpu
