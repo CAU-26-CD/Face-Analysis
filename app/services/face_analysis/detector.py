@@ -77,9 +77,31 @@ class InsightFaceDetector:
 
         app = FaceAnalysis(
             name=self.model_name,
-            providers=self.providers,
+            providers=self._providers_with_fast_cold_start(self.providers),
             allowed_modules=self.allowed_modules,
         )
         app.prepare(ctx_id=0, det_size=self.det_size)
         self._app = app
         return app
+
+    @staticmethod
+    def _providers_with_fast_cold_start(
+        providers: list[str],
+    ) -> list[str | tuple[str, dict]]:
+        """Override CUDAExecutionProvider's default EXHAUSTIVE algo search.
+
+        EXHAUSTIVE benchmarks every cuDNN conv kernel against the live model
+        on first use — great if the worker stays warm for thousands of
+        inferences, brutal on RunPod serverless where each cold worker eats
+        2-3 minutes of autotune before the first frame. HEURISTIC picks a
+        good kernel from input shapes in <1s, costing ~5% per-inference vs
+        EXHAUSTIVE. Net win for our access pattern (one job per cold start).
+        """
+        cuda_opts = {
+            "cudnn_conv_algo_search": "HEURISTIC",
+            "do_copy_in_default_stream": "1",
+        }
+        return [
+            (p, cuda_opts) if p == "CUDAExecutionProvider" else p
+            for p in providers
+        ]
