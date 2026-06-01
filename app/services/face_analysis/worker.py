@@ -2,6 +2,7 @@ import logging
 import os
 import platform
 import tempfile
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -77,10 +78,20 @@ def _analyze_video(
     requested_thumbnail_dir = request.get("thumbnail_dir")
 
     with tempfile.TemporaryDirectory(prefix="face-analyzer-") as temp_dir:
+        download_start = time.monotonic()
         video_path = _download_video(
             s3_key=str(request["s3_key"]),
             s3_url=str(request["s3_url"]),
             destination_dir=Path(temp_dir),
+        )
+        download_elapsed = time.monotonic() - download_start
+        size_mb = video_path.stat().st_size / (1024 * 1024)
+        logger.info(
+            "Downloaded video s3_key=%s size=%.1fMB in %.2fs (%.1f MB/s)",
+            request["s3_key"],
+            size_mb,
+            download_elapsed,
+            size_mb / max(download_elapsed, 0.001),
         )
         local_thumbnail_dir = Path(temp_dir) / "thumbnails"
         if analyzer is None:
@@ -350,13 +361,21 @@ def _download_from_s3(bucket_name: str, s3_key: str, destination: Path) -> None:
     try:
         import boto3
         from boto3.s3.transfer import TransferConfig
+        from botocore.config import Config as BotoConfig
     except ImportError as exc:
         raise RuntimeError(
             "boto3 is required for S3 downloads. Install it with `poetry add boto3`."
         ) from exc
 
     region = os.getenv("AWS_REGION")
-    client_kwargs = {"region_name": region} if region else {}
+    client_kwargs: dict = {"region_name": region} if region else {}
+
+    use_accelerate = os.getenv("S3_USE_ACCELERATE", "false").lower() in (
+        "1", "true", "yes",
+    )
+    if use_accelerate:
+        client_kwargs["config"] = BotoConfig(s3={"use_accelerate_endpoint": True})
+
     client = boto3.client("s3", **client_kwargs)
 
     max_concurrency = int(os.getenv("S3_DOWNLOAD_MAX_CONCURRENCY", "16"))
