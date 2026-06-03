@@ -35,7 +35,7 @@ def _run_sequence(
 
 
 def test_single_moving_person_keeps_same_track_id_across_frames():
-    tracker = PersonTracker(with_reid=False)
+    tracker = PersonTracker()
     detections_by_frame = [
         [_person_at(i, x=100.0 + 5.0 * i, y=200.0)] for i in range(15)
     ]
@@ -46,7 +46,7 @@ def test_single_moving_person_keeps_same_track_id_across_frames():
 
 
 def test_two_people_get_distinct_track_ids():
-    tracker = PersonTracker(with_reid=False)
+    tracker = PersonTracker()
     detections_by_frame = [
         [
             _person_at(i, x=100.0 + 2.0 * i, y=200.0),
@@ -62,7 +62,7 @@ def test_two_people_get_distinct_track_ids():
 
 
 def test_short_occlusion_within_track_buffer_recovers_same_id():
-    tracker = PersonTracker(track_buffer=50, with_reid=False)
+    tracker = PersonTracker(track_buffer=50)
     sequence = []
     for i in range(0, 15):
         sequence.append([_person_at(i, x=100.0 + 5.0 * i, y=200.0)])
@@ -80,7 +80,7 @@ def test_short_occlusion_within_track_buffer_recovers_same_id():
 
 
 def test_reset_drops_internal_state():
-    tracker = PersonTracker(with_reid=False)
+    tracker = PersonTracker()
     _run_sequence(tracker, [[_person_at(i, x=100.0 + 5.0 * i, y=200.0)] for i in range(15)])
     assert tracker._tracker is not None
     tracker.reset()
@@ -88,7 +88,7 @@ def test_reset_drops_internal_state():
 
 
 def test_empty_detections_returns_empty():
-    tracker = PersonTracker(with_reid=False)
+    tracker = PersonTracker()
     assert tracker.update(_frame(0), []) == []
 
 

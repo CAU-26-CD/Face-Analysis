@@ -6,15 +6,11 @@ from app.services.face_analysis.models import (
 from app.services.face_analysis.tracklet_clusterer import TrackletClusterer
 
 
-def _person_detection(
-    t: float,
-    frame_index: int = 0,
-    bbox: tuple[float, float, float, float] = (0, 0, 100, 200),
-) -> PersonDetection:
+def _person_detection(t: float, frame_index: int = 0) -> PersonDetection:
     return PersonDetection(
         timestamp_seconds=t,
         frame_index=frame_index,
-        bbox=bbox,
+        bbox=(0, 0, 100, 200),
         confidence=0.9,
     )
 
@@ -88,18 +84,12 @@ def test_tracklets_with_dissimilar_embeddings_form_separate_clusters():
     assert ids == {"cluster_1", "cluster_2"}
 
 
-def test_tracklets_without_face_identity_are_dropped_when_spatially_far():
-    """Face-less tracklet that's far from any identified cluster's bbox has
-    no anchor to attach to and is correctly dropped — same as before the
-    orphan-bridge pass existed."""
+def test_tracklets_without_face_identity_are_dropped():
     clusterer = TrackletClusterer()
     identified = _tracklet("person_1", 0.0, 5.0, [1.0, 0.0, 0.0])
     unidentified = PersonTracklet(
         track_id="person_2",
-        person_detections=[
-            _person_detection(6.0, bbox=(500, 500, 600, 700)),
-            _person_detection(8.0, bbox=(500, 500, 600, 700)),
-        ],
+        person_detections=[_person_detection(6.0), _person_detection(8.0)],
         face_detections=[],
         aggregated_embedding=[],
         exemplar_embeddings=[],
@@ -111,202 +101,6 @@ def test_tracklets_without_face_identity_are_dropped_when_spatially_far():
 
     assert len(clusters) == 1
     assert clusters[0].tracklets[0].track_id == "person_1"
-
-
-def test_face_less_orphan_attaches_to_spatially_adjacent_cluster():
-    """The headline case: actor walks in facing forward (face seen → tracklet
-    identified), turns their back (ByteTrack ID flip, no face → orphan
-    tracklet at the same screen position), turns around again. The orphan
-    must get stitched into the identified cluster so the back-turned span
-    survives in the appearance timeline."""
-    clusterer = TrackletClusterer()
-    embedding = [1.0, 0.0, 0.0]
-    same_spot = (100, 100, 200, 400)
-    identified = PersonTracklet(
-        track_id="person_1",
-        person_detections=[
-            _person_detection(0.0, bbox=same_spot),
-            _person_detection(2.0, bbox=same_spot),
-        ],
-        face_detections=[_face_detection(0.0, embedding)],
-        aggregated_embedding=embedding,
-        exemplar_embeddings=[embedding],
-        start_seconds=0.0,
-        end_seconds=2.0,
-    )
-    orphan = PersonTracklet(
-        track_id="person_2",
-        person_detections=[
-            _person_detection(2.3, bbox=same_spot),
-            _person_detection(4.0, bbox=same_spot),
-        ],
-        face_detections=[],
-        aggregated_embedding=[],
-        exemplar_embeddings=[],
-        start_seconds=2.3,
-        end_seconds=4.0,
-    )
-
-    clusters = clusterer.cluster([identified, orphan])
-
-    assert len(clusters) == 1
-    track_ids = {t.track_id for t in clusters[0].tracklets}
-    assert track_ids == {"person_1", "person_2"}
-    assert clusters[0].end_seconds == 4.0
-
-
-def test_orphan_does_not_attach_when_time_gap_exceeds_threshold():
-    """Orphan starts long after the identified tracklet ends — even at the
-    same screen position, this is more likely a new person walking into the
-    same spot than the original actor returning silently. Drop it."""
-    clusterer = TrackletClusterer(orphan_max_gap_seconds=2.0)
-    embedding = [1.0, 0.0, 0.0]
-    same_spot = (100, 100, 200, 400)
-    identified = PersonTracklet(
-        track_id="person_1",
-        person_detections=[_person_detection(0.0, bbox=same_spot)],
-        face_detections=[_face_detection(0.0, embedding)],
-        aggregated_embedding=embedding,
-        exemplar_embeddings=[embedding],
-        start_seconds=0.0,
-        end_seconds=2.0,
-    )
-    orphan = PersonTracklet(
-        track_id="person_2",
-        person_detections=[_person_detection(10.0, bbox=same_spot)],
-        face_detections=[],
-        aggregated_embedding=[],
-        exemplar_embeddings=[],
-        start_seconds=10.0,
-        end_seconds=12.0,
-    )
-
-    clusters = clusterer.cluster([identified, orphan])
-    assert len(clusters) == 1
-    assert [t.track_id for t in clusters[0].tracklets] == ["person_1"]
-
-
-def test_orphan_picks_highest_iou_when_multiple_clusters_are_candidates():
-    """Two identified clusters end within the temporal window. The orphan's
-    bbox overlaps cluster A heavily and cluster B only marginally — it
-    must attach to A."""
-    clusterer = TrackletClusterer()
-    embedding_a = [1.0, 0.0, 0.0]
-    embedding_b = [0.0, 1.0, 0.0]
-    cluster_a_spot = (100, 100, 200, 400)
-    cluster_b_spot = (180, 100, 280, 400)  # ~partial overlap with A's right edge
-    orphan_spot = (100, 100, 200, 400)  # tight match with A
-
-    tracklet_a = PersonTracklet(
-        track_id="a",
-        person_detections=[_person_detection(0.0, bbox=cluster_a_spot)],
-        face_detections=[_face_detection(0.0, embedding_a)],
-        aggregated_embedding=embedding_a,
-        exemplar_embeddings=[embedding_a],
-        start_seconds=0.0,
-        end_seconds=2.0,
-    )
-    tracklet_b = PersonTracklet(
-        track_id="b",
-        person_detections=[_person_detection(0.0, bbox=cluster_b_spot)],
-        face_detections=[_face_detection(0.0, embedding_b)],
-        aggregated_embedding=embedding_b,
-        exemplar_embeddings=[embedding_b],
-        start_seconds=0.0,
-        end_seconds=2.0,
-    )
-    orphan = PersonTracklet(
-        track_id="orphan",
-        person_detections=[_person_detection(3.0, bbox=orphan_spot)],
-        face_detections=[],
-        aggregated_embedding=[],
-        exemplar_embeddings=[],
-        start_seconds=3.0,
-        end_seconds=4.0,
-    )
-
-    clusters = clusterer.cluster([tracklet_a, tracklet_b, orphan])
-    by_id = {c.cluster_id: c for c in clusters}
-    a_cluster = next(c for c in clusters if "a" in {t.track_id for t in c.tracklets})
-    assert "orphan" in {t.track_id for t in a_cluster.tracklets}
-    b_cluster = next(c for c in clusters if "b" in {t.track_id for t in c.tracklets})
-    assert "orphan" not in {t.track_id for t in b_cluster.tracklets}
-
-
-def test_orphan_attachment_respects_temporal_overlap_veto():
-    """An orphan that sits at the same spot AND overlaps in time with an
-    identified tracklet for longer than the veto window is almost certainly
-    a different person who happened to occlude their face — never the same
-    person, since one body can't co-occupy a frame with itself."""
-    clusterer = TrackletClusterer(min_overlap_seconds=0.5)
-    embedding = [1.0, 0.0, 0.0]
-    same_spot = (100, 100, 200, 400)
-    identified = PersonTracklet(
-        track_id="person_1",
-        person_detections=[
-            _person_detection(0.0, bbox=same_spot),
-            _person_detection(10.0, bbox=same_spot),
-        ],
-        face_detections=[_face_detection(0.0, embedding)],
-        aggregated_embedding=embedding,
-        exemplar_embeddings=[embedding],
-        start_seconds=0.0,
-        end_seconds=10.0,
-    )
-    orphan = PersonTracklet(
-        track_id="person_2",
-        person_detections=[
-            _person_detection(2.0, bbox=same_spot),
-            _person_detection(8.0, bbox=same_spot),
-        ],
-        face_detections=[],
-        aggregated_embedding=[],
-        exemplar_embeddings=[],
-        start_seconds=2.0,
-        end_seconds=8.0,
-    )
-
-    clusters = clusterer.cluster([identified, orphan])
-    assert len(clusters) == 1
-    assert [t.track_id for t in clusters[0].tracklets] == ["person_1"]
-
-
-def test_orphan_attachment_includes_person_detections_in_count():
-    """After attachment, the cluster's ``detection_count`` must include the
-    orphan's person observations — that's the whole point: the back-turned
-    timestamps need to feed into the appearance timeline."""
-    clusterer = TrackletClusterer()
-    embedding = [1.0, 0.0, 0.0]
-    same_spot = (100, 100, 200, 400)
-    identified = PersonTracklet(
-        track_id="person_1",
-        person_detections=[
-            _person_detection(0.0, bbox=same_spot),
-            _person_detection(1.0, bbox=same_spot),
-        ],
-        face_detections=[_face_detection(0.0, embedding)],
-        aggregated_embedding=embedding,
-        exemplar_embeddings=[embedding],
-        start_seconds=0.0,
-        end_seconds=1.0,
-    )
-    orphan = PersonTracklet(
-        track_id="person_2",
-        person_detections=[
-            _person_detection(2.0, bbox=same_spot),
-            _person_detection(3.0, bbox=same_spot),
-            _person_detection(4.0, bbox=same_spot),
-        ],
-        face_detections=[],
-        aggregated_embedding=[],
-        exemplar_embeddings=[],
-        start_seconds=2.0,
-        end_seconds=4.0,
-    )
-
-    clusters = clusterer.cluster([identified, orphan])
-    assert len(clusters) == 1
-    assert clusters[0].detection_count == 5
 
 
 def test_cluster_detection_count_sums_person_observations():

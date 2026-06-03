@@ -13,18 +13,6 @@ from app.services.face_analysis.models import PersonTracklet, WithinVideoCluster
 # people sharing the frame and gets vetoed regardless of similarity.
 DEFAULT_MIN_OVERLAP_SECONDS = 0.5
 
-# Spatio-temporal bridge for face-less tracklets. When an actor turns their
-# back (or is otherwise occluded such that no face fires above InsightFace's
-# confidence floor) ByteTrack still keeps a person bbox running, but at the
-# next ID flip the new track has no face embeddings — ``has_identity`` is
-# False and the tracklet would be dropped. We rescue it by stitching it into
-# whichever identified cluster has a bbox that's both temporally and
-# spatially adjacent. The veto still fires for sustained co-occurrence, so
-# two distinct people standing in the same spot in turn cannot bleed into
-# each other.
-DEFAULT_ORPHAN_MAX_GAP_SECONDS = 2.0
-DEFAULT_ORPHAN_MIN_BBOX_IOU = 0.3
-
 
 @dataclass
 class _PendingCluster:
@@ -132,8 +120,6 @@ class TrackletClusterer:
         similarity_threshold: float = 0.40,
         centroid_merge_threshold: float = 0.60,
         min_overlap_seconds: float = DEFAULT_MIN_OVERLAP_SECONDS,
-        orphan_max_gap_seconds: float = DEFAULT_ORPHAN_MAX_GAP_SECONDS,
-        orphan_min_bbox_iou: float = DEFAULT_ORPHAN_MIN_BBOX_IOU,
     ):
         if not -1.0 <= similarity_threshold <= 1.0:
             raise ValueError("similarity_threshold must be between -1.0 and 1.0")
@@ -143,20 +129,13 @@ class TrackletClusterer:
             )
         if min_overlap_seconds < 0:
             raise ValueError("min_overlap_seconds must be >= 0")
-        if orphan_max_gap_seconds < 0:
-            raise ValueError("orphan_max_gap_seconds must be >= 0")
-        if not 0.0 <= orphan_min_bbox_iou <= 1.0:
-            raise ValueError("orphan_min_bbox_iou must be between 0.0 and 1.0")
 
         self.similarity_threshold = similarity_threshold
         self.centroid_merge_threshold = centroid_merge_threshold
         self.min_overlap_seconds = min_overlap_seconds
-        self.orphan_max_gap_seconds = orphan_max_gap_seconds
-        self.orphan_min_bbox_iou = orphan_min_bbox_iou
 
     def cluster(self, tracklets: list[PersonTracklet]) -> list[WithinVideoCluster]:
         identified = [t for t in tracklets if t.has_identity]
-        orphans = [t for t in tracklets if not t.has_identity]
         ordered = sorted(identified, key=lambda tracklet: tracklet.start_seconds)
 
         pending: list[_PendingCluster] = []
@@ -192,7 +171,6 @@ class TrackletClusterer:
                 best_cluster.add(tracklet)
 
         pending = self._merge_clusters_pairwise(pending)
-        pending = self._attach_orphan_tracklets(pending, orphans)
         return [cluster.finalize() for cluster in pending]
 
     def _merge_clusters_pairwise(
@@ -230,84 +208,6 @@ class TrackletClusterer:
             i, j, _ = best
             pending[i].absorb(pending[j])
             del pending[j]
-
-    def _attach_orphan_tracklets(
-        self,
-        pending: list[_PendingCluster],
-        orphans: list[PersonTracklet],
-    ) -> list[_PendingCluster]:
-        """Stitch face-less tracklets into the closest identified cluster.
-
-        Targets the "actor turns their back" failure mode: ByteTrack ID
-        flips while the face is hidden, spawning a tracklet with no
-        embedding. Without this pass that tracklet — and the entire
-        back-turned span of the appearance — would be dropped by the
-        ``has_identity`` filter. We attach it to whichever existing cluster
-        has a bbox that's temporally near (gap ≤ ``orphan_max_gap_seconds``)
-        AND spatially overlapping (IoU ≥ ``orphan_min_bbox_iou``) at the
-        boundary. The temporal-overlap veto is preserved so two distinct
-        actors taking turns in the same spot can't be glued together.
-        """
-        if not pending or not orphans:
-            return pending
-
-        ordered = sorted(orphans, key=lambda tracklet: tracklet.start_seconds)
-        for orphan in ordered:
-            best_cluster = None
-            best_iou = -1.0
-            for cluster in pending:
-                if self._tracklets_overlap_excessively(
-                    [orphan], cluster.tracklets
-                ):
-                    continue
-                iou = self._orphan_attachment_iou(orphan, cluster)
-                if iou is None:
-                    continue
-                if iou > best_iou:
-                    best_iou = iou
-                    best_cluster = cluster
-            if best_cluster is not None:
-                best_cluster.add(orphan)
-        return pending
-
-    def _orphan_attachment_iou(
-        self,
-        orphan: PersonTracklet,
-        cluster: _PendingCluster,
-    ) -> float | None:
-        """Best bbox IoU between ``orphan`` and any tracklet in ``cluster``
-        whose time gap is within ``orphan_max_gap_seconds``. The bbox pair
-        is chosen so each side contributes the box closest to the other in
-        time — i.e. the box just before the gap and just after.
-
-        Returns ``None`` when nothing in the cluster lands inside the
-        temporal window OR the best IoU falls below ``orphan_min_bbox_iou``.
-        """
-        best_iou = -1.0
-        within_window = False
-        for tracklet in cluster.tracklets:
-            gap = max(
-                orphan.start_seconds - tracklet.end_seconds,
-                tracklet.start_seconds - orphan.end_seconds,
-            )
-            if gap > self.orphan_max_gap_seconds:
-                continue
-            within_window = True
-            if orphan.start_seconds >= tracklet.end_seconds:
-                orphan_box = orphan.person_detections[0].bbox
-                tracklet_box = tracklet.person_detections[-1].bbox
-            elif tracklet.start_seconds >= orphan.end_seconds:
-                orphan_box = orphan.person_detections[-1].bbox
-                tracklet_box = tracklet.person_detections[0].bbox
-            else:
-                orphan_box = orphan.person_detections[0].bbox
-                tracklet_box = tracklet.person_detections[-1].bbox
-            iou = _bbox_iou(orphan_box, tracklet_box)
-            if iou > best_iou:
-                best_iou = iou
-        if not within_window or best_iou < self.orphan_min_bbox_iou:
-            return None
-        return best_iou
 
     def _passes_similarity(self, median_sim: float, centroid_sim: float) -> bool:
         return (
@@ -365,27 +265,6 @@ def _centroid_cosine(left: list[float], right: list[float]) -> float:
     if left_norm == 0.0 or right_norm == 0.0:
         return -1.0
     return float(np.dot(left_vec, right_vec) / (left_norm * right_norm))
-
-
-def _bbox_iou(
-    a: tuple[float, float, float, float],
-    b: tuple[float, float, float, float],
-) -> float:
-    ax1, ay1, ax2, ay2 = a
-    bx1, by1, bx2, by2 = b
-    ix1 = max(ax1, bx1)
-    iy1 = max(ay1, by1)
-    ix2 = min(ax2, bx2)
-    iy2 = min(ay2, by2)
-    iw = max(0.0, ix2 - ix1)
-    ih = max(0.0, iy2 - iy1)
-    inter = iw * ih
-    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
-    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
-    union = area_a + area_b - inter
-    if union <= 0.0:
-        return 0.0
-    return inter / union
 
 
 def _median_pair_similarity(
