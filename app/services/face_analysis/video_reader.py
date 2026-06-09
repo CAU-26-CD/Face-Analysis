@@ -1,5 +1,4 @@
 import logging
-import os
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,11 +11,12 @@ logger = logging.getLogger(__name__)
 class VideoFrameReader:
     """Sample frames from a video at ``frame_interval_seconds``.
 
-    Prefers decord with GPU context when ``FACE_ANALYZER_DEVICE=cuda`` because
-    it decodes on NVDEC and lets us request only the indices we want — OpenCV
-    decodes *every* frame even when we keep 1 in 10, which is the main CPU
-    bottleneck on long videos. Falls back to OpenCV when decord isn't
-    installed or the GPU path fails for this file.
+    Uses decord on CPU because it lets us decode only the indices we want —
+    OpenCV decodes *every* frame even when we keep 1 in 10, which is the main
+    CPU bottleneck on long videos. NVDEC was tried earlier but the GPU
+    deployment doesn't have headroom for both decord and YOLO/InsightFace at
+    once, so video decode stays on CPU and the GPU is left for inference.
+    Falls back to OpenCV when decord isn't installed or fails for this file.
     """
 
     def __init__(self, frame_interval_seconds: float = 0.3):
@@ -30,7 +30,6 @@ class VideoFrameReader:
         if not path.exists():
             raise FileNotFoundError(f"Video file not found: {path}")
 
-        use_gpu = os.getenv("FACE_ANALYZER_DEVICE", "").lower() == "cuda"
         try:
             import decord  # noqa: F401
         except ImportError:
@@ -46,7 +45,7 @@ class VideoFrameReader:
             if source is None:
                 continue
             try:
-                yield from self._read_with_decord(source, use_gpu=use_gpu)
+                yield from self._read_with_decord(source)
                 return
             except Exception as exc:
                 logger.warning(
@@ -71,11 +70,14 @@ class VideoFrameReader:
         yield "original", path
         yield "MKV stream-copy", self._remux_mkv(path)
 
-    def _read_with_decord(self, path: Path, use_gpu: bool) -> Iterator[VideoFrame]:
-        from decord import VideoReader, cpu, gpu
+    def _read_with_decord(self, path: Path) -> Iterator[VideoFrame]:
+        from decord import VideoReader, cpu
 
-        ctx = gpu(0) if use_gpu else cpu(0)
-        vr = VideoReader(str(path), ctx=ctx)
+        # NVDEC was attempted earlier but the deployment GPU doesn't have
+        # headroom for decord + YOLO + InsightFace at once; pinning decord to
+        # CPU keeps the GPU free for inference and avoids the NVDEC OOM that
+        # cascaded into a YOLO weight-load OOM on the next job.
+        vr = VideoReader(str(path), ctx=cpu(0))
         fps = vr.get_avg_fps()
         if fps <= 0:
             raise ValueError(f"Could not read FPS from video file: {path}")
@@ -86,19 +88,24 @@ class VideoFrameReader:
         if not target_indices:
             return
 
-        # Batch-decode only the frames we sample. NVDEC throughput is much
-        # higher than OpenCV's per-frame software decode, and skipping the
-        # unused 9-of-10 frames saves the bulk of the work.
-        batch = vr.get_batch(target_indices).asnumpy()
-
-        for batch_pos, frame_index in enumerate(target_indices):
-            # decord returns RGB; downstream (InsightFace, OpenCV writes) expects BGR.
-            frame_bgr = batch[batch_pos, :, :, ::-1]
-            yield VideoFrame(
-                timestamp_seconds=float(frame_index / fps),
-                frame_index=int(frame_index),
-                frame=frame_bgr,
-            )
+        # Batch-decode only the frames we sample, in fixed-size chunks. A
+        # single get_batch over every sampled index allocates a numpy buffer
+        # proportional to video length (frames × H × W × 3 bytes), which
+        # exhausts container RAM on long inputs; chunking caps the peak at
+        # CHUNK frames regardless of total length.
+        CHUNK = 64
+        for chunk_start in range(0, len(target_indices), CHUNK):
+            chunk_indices = target_indices[chunk_start : chunk_start + CHUNK]
+            batch = vr.get_batch(chunk_indices).asnumpy()
+            for batch_pos, frame_index in enumerate(chunk_indices):
+                # decord returns RGB; downstream (InsightFace, OpenCV writes) expects BGR.
+                frame_bgr = batch[batch_pos, :, :, ::-1]
+                yield VideoFrame(
+                    timestamp_seconds=float(frame_index / fps),
+                    frame_index=int(frame_index),
+                    frame=frame_bgr,
+                )
+            del batch
 
     def _remux_mkv(self, path: Path) -> Path | None:
         """Stream-copy video into MKV with no audio. ~1-2s for 5-min 1080p.

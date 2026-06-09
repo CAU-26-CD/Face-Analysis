@@ -65,8 +65,27 @@ def run_analysis_job(
             "analysis_status": "failed",
             "error_message": str(exc),
         }
+    finally:
+        # PyTorch keeps freed allocations in a caching allocator for reuse,
+        # so back-to-back jobs accumulate reserved-but-unused GPU memory and
+        # eventually trip NVDEC / YOLO OOM on the next video. Force a release
+        # at the job boundary so each job starts from a clean slate.
+        _release_gpu_memory()
 
     _post_callback(callback_url, payload)
+
+
+def _release_gpu_memory() -> None:
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
 
 def _analyze_video(
