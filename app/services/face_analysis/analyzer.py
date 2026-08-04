@@ -1,4 +1,6 @@
+import logging
 import os
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +32,8 @@ from app.services.face_analysis.thumbnails import ClusterThumbnailExtractor, cro
 from app.services.face_analysis.timeline import AppearanceTimelineBuilder
 from app.services.face_analysis.tracklet_clusterer import TrackletClusterer
 from app.services.face_analysis.video_reader import VideoFrameReader
+
+logger = logging.getLogger(__name__)
 
 # Per-track cap on cached BGR crops kept for the thumbnail step. Crops are
 # evicted by lowest quality_score once the cap is hit, so a long tracklet
@@ -137,13 +141,27 @@ class FaceVideoAnalyzer:
         want_crops = thumbnail_dir is not None
         padding_ratio = self.thumbnail_extractor.padding_ratio if want_crops else 0.0
 
+        # Decode vs. inference are interleaved (the reader is a generator
+        # consumed by this loop), so wall-clock alone can't attribute time.
+        # _timed_frames charges time spent pulling frames to "decode"; the
+        # explicit start/stop pairs below charge the model calls.
+        analysis_start = time.monotonic()
+        stage_seconds = {"decode": 0.0, "person_detect": 0.0, "face_detect": 0.0}
+        frame_shape: tuple[int, int] | None = None
+
         sampled_frame_count = 0
         for frame_batch in _batched(
-            self.frame_reader.read_frames(path), YOLO_BATCH_SIZE
+            _timed_frames(self.frame_reader.read_frames(path), stage_seconds),
+            YOLO_BATCH_SIZE,
         ):
+            if frame_shape is None:
+                height, width = frame_batch[0].frame.shape[:2]
+                frame_shape = (width, height)
+            stage_start = time.monotonic()
             person_detections_per_frame = self.person_detector.detect_batch(
                 frame_batch
             )
+            stage_seconds["person_detect"] += time.monotonic() - stage_start
             for video_frame, person_detections in zip(
                 frame_batch, person_detections_per_frame
             ):
@@ -161,7 +179,9 @@ class FaceVideoAnalyzer:
                     for p in tracked_persons
                 )
                 if needs_face_pass:
+                    stage_start = time.monotonic()
                     face_detections = self.face_detector.detect(video_frame)
+                    stage_seconds["face_detect"] += time.monotonic() - stage_start
                     tracked_faces = self.face_associator.associate(
                         face_detections, tracked_persons
                     )
@@ -190,6 +210,7 @@ class FaceVideoAnalyzer:
                         len(face_detections),
                     )
 
+        post_start = time.monotonic()
         tracklets = self._finalize_tracklets(track_buffers)
         clusters = self.tracklet_clusterer.cluster(tracklets)
         cluster_thumbnail_paths: dict[str, list[str]] = {}
@@ -207,6 +228,28 @@ class FaceVideoAnalyzer:
             }
         match_result = self.actor_matcher.match(clusters, known_actors)
         appearances = self._build_appearances(clusters, match_result)
+
+        total_seconds = time.monotonic() - analysis_start
+        sample_interval = getattr(
+            self.frame_reader, "frame_interval_seconds", None
+        )
+        width, height = frame_shape or (0, 0)
+        logger.info(
+            "Analysis timings for %s: decode=%.1fs person_detect=%.1fs "
+            "face_detect+embed=%.1fs post=%.1fs total=%.1fs | "
+            "sampled_frames=%d sample_interval=%ss (~%s fps) resolution=%dx%d",
+            path.name,
+            stage_seconds["decode"],
+            stage_seconds["person_detect"],
+            stage_seconds["face_detect"],
+            time.monotonic() - post_start,
+            total_seconds,
+            sampled_frame_count,
+            sample_interval if sample_interval is not None else "?",
+            f"{1.0 / sample_interval:.1f}" if sample_interval else "?",
+            width,
+            height,
+        )
 
         return FaceAnalysisResult(
             video_path=str(path),
@@ -318,6 +361,27 @@ class FaceVideoAnalyzer:
         for person_id, timestamp in labeled_timestamps:
             timeline_builder.add(person_id, timestamp)
         return timeline_builder.build()
+
+
+def _timed_frames(
+    frames: Iterator[VideoFrame], stage_seconds: dict[str, float]
+) -> Iterator[VideoFrame]:
+    """Charge time spent pulling frames from the reader to ``decode``.
+
+    The reader generator does its decord/OpenCV work lazily inside ``next()``,
+    so this wrapper is the only place decode time is observable separately
+    from the inference calls interleaved with it.
+    """
+    iterator = iter(frames)
+    while True:
+        start = time.monotonic()
+        try:
+            frame = next(iterator)
+        except StopIteration:
+            stage_seconds["decode"] += time.monotonic() - start
+            return
+        stage_seconds["decode"] += time.monotonic() - start
+        yield frame
 
 
 def _batched(

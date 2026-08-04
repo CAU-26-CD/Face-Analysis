@@ -41,6 +41,16 @@ ANALYZER = _build_warm_analyzer()
 def handler(job: dict) -> dict:
     """RunPod job handler. ``job["input"]`` carries the BE AnalyzeRequest payload."""
     job_input = job.get("input") or {}
+
+    # BE sends {"input": {"warmup": true}} at upload/init to boot a worker
+    # before the real analysis request arrives. The analyzer is loaded at
+    # module import (ANALYZER above), so by the time this branch runs the
+    # models are already warm — just acknowledge. The payload carries no
+    # video_id / s3_url / callback_url, so no callback and no field access.
+    if job_input.get("warmup"):
+        logger.info("Warmup request acknowledged; analyzer already loaded")
+        return {"warmup": "ok"}
+
     video_id = job_input.get("video_id")
     logger.info("Received job for video_id=%s", video_id)
 
