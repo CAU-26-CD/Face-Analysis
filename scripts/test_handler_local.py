@@ -7,7 +7,13 @@ Two modes:
      Imports ``app.handler`` so the module-level analyzer warm-up runs.
      Confirms YOLO + InsightFace load without error. Does NOT invoke a job.
 
-  2) Full job (with args)
+  2) Warmup request (--warmup)
+       python -m scripts.test_handler_local --warmup
+     Invokes ``handler({"input": {"warmup": true}})`` twice — the shape BE
+     sends at upload/init — and checks both calls return {"warmup": "ok"}
+     without touching analysis fields or posting a callback.
+
+  3) Full job (with args)
        python -m scripts.test_handler_local <s3_key> <s3_url> <callback_url>
      Invokes ``handler({"input": ...})`` end-to-end. Requires the same env
      the production worker needs (ANALYZER_SECRET, AWS_*, S3_BUCKET_NAME).
@@ -25,6 +31,17 @@ def main() -> int:
 
     if len(sys.argv) == 1:
         print("handler imported and analyzer warmed successfully.")
+        return 0
+
+    if sys.argv[1] == "--warmup":
+        # BE may send several warmups per session (one per recording start),
+        # so verify the branch is idempotent.
+        for attempt in (1, 2):
+            result = handler({"input": {"warmup": True}})
+            print(f"warmup call {attempt} returned: {result}")
+            if result != {"warmup": "ok"}:
+                print("unexpected warmup response", file=sys.stderr)
+                return 1
         return 0
 
     if len(sys.argv) < 4:
