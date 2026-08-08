@@ -1,4 +1,8 @@
+import logging
+
 from app.services.face_analysis.models import FaceDetection, VideoFrame
+
+logger = logging.getLogger(__name__)
 
 
 class InsightFaceDetector:
@@ -81,8 +85,41 @@ class InsightFaceDetector:
             allowed_modules=self.allowed_modules,
         )
         app.prepare(ctx_id=0, det_size=self.det_size)
+        self._check_providers_applied(app)
         self._app = app
         return app
+
+    def _check_providers_applied(self, app) -> None:
+        """Log loudly when ONNX Runtime silently dropped an accelerator EP.
+
+        ORT does not raise when a provider's shared library fails to dlopen —
+        it prints one stderr line and quietly builds the session on the next
+        provider in the list, which is always CPU. That failure mode cost us a
+        7x slower face pass in production without a single error-level log,
+        because the only symptom was a timing number nobody was diffing. This
+        turns it into something greppable.
+        """
+        applied: set[str] = set()
+        for model in getattr(app, "models", {}).values():
+            session = getattr(model, "session", None)
+            if session is not None:
+                applied.update(session.get_providers())
+
+        missing = [
+            p for p in self.providers
+            if p != "CPUExecutionProvider" and p not in applied
+        ]
+        if missing:
+            logger.error(
+                "InsightFace fell back to %s — ONNX Runtime could not load %s. "
+                "Face detection + embedding will run on CPU. Look for the "
+                "'provider_bridge_ort.cc ... Failed to load library' line above "
+                "for the missing CUDA library and its expected version.",
+                sorted(applied),
+                missing,
+            )
+        else:
+            logger.info("InsightFace providers active: %s", sorted(applied))
 
     @staticmethod
     def _providers_with_fast_cold_start(

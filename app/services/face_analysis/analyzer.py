@@ -115,6 +115,29 @@ class FaceVideoAnalyzer:
         self.thumbnail_extractor = thumbnail_extractor or ClusterThumbnailExtractor()
         self.exemplars_per_tracklet = exemplars_per_tracklet
 
+    def warmup(self) -> None:
+        """Force both detectors to load weights and build their CUDA context.
+
+        Constructing this class loads nothing: YOLO and InsightFace both defer
+        weight loading to their first ``detect`` call. So the RunPod warmup
+        request used to return "ok" while the models were still cold, and the
+        ~7s of session build + CUDA context creation landed inside the first
+        real job instead. Pushing one synthetic frame through each moves that
+        cost onto the warmup request, which is exactly what BE fires it for.
+        """
+        blank = np.zeros((640, 640, 3), dtype=np.uint8)
+        frame = VideoFrame(timestamp_seconds=0.0, frame_index=0, frame=blank)
+        start = time.monotonic()
+        try:
+            self.person_detector.detect_batch([frame])
+            self.face_detector.detect(frame)
+        except Exception:
+            # A cold worker that can't warm up can still serve jobs (it just
+            # pays the load cost inline), so never let this kill the process.
+            logger.exception("Model warmup failed; models will load lazily")
+            return
+        logger.info("Model warmup complete in %.1fs", time.monotonic() - start)
+
     def read_sampled_frames(self, video_path: str | Path) -> Iterator[VideoFrame]:
         return self.frame_reader.read_frames(video_path)
 

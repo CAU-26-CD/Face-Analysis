@@ -103,3 +103,56 @@ def test_detect_rejects_invalid_filter_thresholds():
         InsightFaceDetector(min_confidence=1.5)
     with pytest.raises(ValueError):
         InsightFaceDetector(min_bbox_side_pixels=-1)
+
+
+class _FakeSessionModel:
+    def __init__(self, providers: list[str]):
+        self.session = SimpleNamespace(get_providers=lambda: list(providers))
+
+
+def _app_with_providers(providers: list[str]) -> SimpleNamespace:
+    return SimpleNamespace(
+        models={"detection": _FakeSessionModel(providers)},
+    )
+
+
+def test_provider_check_errors_when_cuda_ep_silently_dropped(caplog):
+    """ORT logs to stderr and falls back to CPU rather than raising, so the
+    only signal that GPU inference is gone is this explicit comparison."""
+    detector = InsightFaceDetector(
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
+
+    with caplog.at_level("INFO"):
+        detector._check_providers_applied(
+            _app_with_providers(["CPUExecutionProvider"])
+        )
+
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert "CUDAExecutionProvider" in errors[0].getMessage()
+
+
+def test_provider_check_stays_quiet_when_cuda_ep_applied(caplog):
+    detector = InsightFaceDetector(
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
+
+    with caplog.at_level("INFO"):
+        detector._check_providers_applied(
+            _app_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])
+        )
+
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+def test_provider_check_ignores_cpu_only_configuration(caplog):
+    """CPU-only is a legitimate config (local dev), not a fallback."""
+    detector = InsightFaceDetector(providers=["CPUExecutionProvider"])
+
+    with caplog.at_level("INFO"):
+        detector._check_providers_applied(
+            _app_with_providers(["CPUExecutionProvider"])
+        )
+
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]

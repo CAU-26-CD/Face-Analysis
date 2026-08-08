@@ -5,7 +5,13 @@ httpx>=0.27.0,<1.0.0
 boto3>=1.34.0,<2.0.0
 opencv-python==4.13.0.92
 insightface==0.7.3
-onnxruntime-gpu>=1.25.1,<2.0.0
+# Capped below 1.27: that release switched the PyPI wheels from CUDA 12 to
+# CUDA 13, so the CUDA EP .so links against libcublasLt.so.13 while our base
+# image (nvidia/cuda:12.4.1) only ships .so.12. ORT then fails to dlopen the
+# provider and silently falls back to CPUExecutionProvider — no crash, just a
+# ~7x slower face pass. Raising this cap requires moving the Dockerfile base
+# image and the torch index to CUDA 13 in the same change.
+onnxruntime-gpu>=1.25.1,<1.27
 ultralytics>=8.4.51,<9.0.0
 lap>=0.5.12
 runpod>=1.7.0,<2.0.0

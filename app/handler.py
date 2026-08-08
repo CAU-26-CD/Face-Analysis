@@ -32,7 +32,9 @@ def _build_warm_analyzer() -> FaceVideoAnalyzer:
         device or "cpu",
         onnx_providers or ["CPUExecutionProvider"],
     )
-    return FaceVideoAnalyzer(device=device, onnx_providers=onnx_providers)
+    analyzer = FaceVideoAnalyzer(device=device, onnx_providers=onnx_providers)
+    analyzer.warmup()
+    return analyzer
 
 
 ANALYZER = _build_warm_analyzer()
