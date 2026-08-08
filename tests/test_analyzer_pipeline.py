@@ -238,3 +238,53 @@ def test_pipeline_appearance_intervals_use_person_observations():
     assert len(appearances) == 2
     assert appearances[0].start_seconds == 0.0
     assert appearances[1].start_seconds == 7.0
+
+
+class _RecordingDetector:
+    """Records whether the analyzer actually pushed a frame through."""
+
+    def __init__(self, raises: bool = False):
+        self.calls = 0
+        self.raises = raises
+
+    def _record(self):
+        self.calls += 1
+        if self.raises:
+            raise RuntimeError("weights unavailable")
+
+    def detect(self, _video_frame):
+        self._record()
+        return []
+
+    def detect_batch(self, video_frames):
+        self._record()
+        return [[] for _ in video_frames]
+
+
+def _analyzer_with(person_detector, face_detector) -> FaceVideoAnalyzer:
+    return FaceVideoAnalyzer(
+        person_detector=person_detector,
+        face_detector=face_detector,
+    )
+
+
+def test_warmup_loads_both_models():
+    """Both detectors defer weight loading to their first detect() call, so
+    warmup has to actually run inference — constructing them loads nothing."""
+    person_detector = _RecordingDetector()
+    face_detector = _RecordingDetector()
+
+    _analyzer_with(person_detector, face_detector).warmup()
+
+    assert person_detector.calls == 1
+    assert face_detector.calls == 1
+
+
+def test_warmup_swallows_failures():
+    """A worker that can't warm up must still boot and serve jobs."""
+    person_detector = _RecordingDetector(raises=True)
+    face_detector = _RecordingDetector()
+
+    _analyzer_with(person_detector, face_detector).warmup()
+
+    assert face_detector.calls == 0
