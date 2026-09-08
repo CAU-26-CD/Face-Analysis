@@ -19,13 +19,33 @@ class VideoFrameReader:
     Falls back to OpenCV when decord isn't installed or fails for this file.
     """
 
-    def __init__(self, frame_interval_seconds: float = 0.3):
+    def __init__(
+        self,
+        frame_interval_seconds: float = 0.3,
+        max_frames: int | None = None,
+    ):
         if frame_interval_seconds <= 0:
             raise ValueError("frame_interval_seconds must be greater than 0")
+        if max_frames is not None and max_frames < 1:
+            raise ValueError("max_frames must be >= 1 when set")
 
         self.frame_interval_seconds = frame_interval_seconds
+        # Hard cap on the number of sampled frames yielded, regardless of
+        # video length. Used by the demo fast path to keep a full analysis
+        # under ~2s; None means "no cap" (the normal pipeline).
+        self.max_frames = max_frames
 
     def read_frames(self, video_path: str | Path) -> Iterator[VideoFrame]:
+        frames = self._read_frames(video_path)
+        if self.max_frames is None:
+            yield from frames
+            return
+        for count, frame in enumerate(frames, start=1):
+            yield frame
+            if count >= self.max_frames:
+                return
+
+    def _read_frames(self, video_path: str | Path) -> Iterator[VideoFrame]:
         path = Path(video_path)
         if not path.exists():
             raise FileNotFoundError(f"Video file not found: {path}")
@@ -85,6 +105,11 @@ class VideoFrameReader:
         total_frames = len(vr)
         frame_step = max(1, int(round(fps * self.frame_interval_seconds)))
         target_indices = list(range(0, total_frames, frame_step))
+        # Demo fast path: never decode more than the cap. Trimming here (not
+        # just in the read_frames wrapper) means get_batch only touches the
+        # handful of frames the analyzer will actually use.
+        if self.max_frames is not None:
+            target_indices = target_indices[: self.max_frames]
         if not target_indices:
             return
 

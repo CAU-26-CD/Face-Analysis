@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from app.services.face_analysis.actor_matcher import ActorMatcher
+from app.services.face_analysis.demo_config import demo_settings
 from app.services.face_analysis.detector import InsightFaceDetector
 from app.services.face_analysis.exemplars import select_top_k_diverse
 from app.services.face_analysis.face_person_associator import FacePersonAssociator
@@ -101,13 +102,42 @@ class FaceVideoAnalyzer:
     ):
         if exemplars_per_tracklet < 1:
             raise ValueError("exemplars_per_tracklet must be >= 1")
-        self.frame_reader = frame_reader or VideoFrameReader()
-        self.person_detector = person_detector or PersonDetector(device=device)
+
+        # Demo fast path. Only the auto-constructed defaults are swapped —
+        # anything the caller passes in explicitly (e.g. tests) wins. See
+        # app/services/face_analysis/demo_config.py.
+        self._demo = demo_settings()
+
+        if frame_reader is not None:
+            self.frame_reader = frame_reader
+        elif self._demo.enabled:
+            self.frame_reader = VideoFrameReader(
+                frame_interval_seconds=self._demo.frame_interval_seconds,
+                max_frames=self._demo.max_frames,
+            )
+        else:
+            self.frame_reader = VideoFrameReader()
+
+        if person_detector is not None:
+            self.person_detector = person_detector
+        elif self._demo.enabled:
+            self.person_detector = PersonDetector(
+                device=device, imgsz=self._demo.yolo_imgsz
+            )
+        else:
+            self.person_detector = PersonDetector(device=device)
 
         self.person_tracker = person_tracker or PersonTracker()
-        self.face_detector = face_detector or InsightFaceDetector(
-            providers=onnx_providers,
-        )
+
+        if face_detector is not None:
+            self.face_detector = face_detector
+        elif self._demo.enabled:
+            self.face_detector = InsightFaceDetector(
+                providers=onnx_providers,
+                det_size=(self._demo.face_det_size, self._demo.face_det_size),
+            )
+        else:
+            self.face_detector = InsightFaceDetector(providers=onnx_providers)
         self.face_associator = face_associator or FacePersonAssociator()
         self.tracklet_clusterer = tracklet_clusterer or TrackletClusterer()
         self.actor_matcher = actor_matcher or ActorMatcher()
@@ -156,6 +186,12 @@ class FaceVideoAnalyzer:
     ) -> FaceAnalysisResult:
         path = Path(video_path)
         known_actors = known_actors or []
+
+        if self._demo.enabled and thumbnail_dir is not None:
+            # Cropping + JPEG encode + S3 upload is pure latency the demo
+            # doesn't need. Callback just carries thumbnail_s3_key=None.
+            logger.info("DEMO_FAST_MODE: skipping thumbnail extraction")
+            thumbnail_dir = None
 
         self.person_tracker.reset()
         track_buffers: dict[str, _TrackBuffer] = {}

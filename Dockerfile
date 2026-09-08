@@ -13,6 +13,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # well-formed files.
 ENV DECORD_EOF_RETRY_MAX=40960
 
+# DEMO BUILD ONLY (branch demo/fast-face-analysis). Trades accuracy for a
+# ~1-2s end-to-end analysis: a handful of sampled frames, smaller detector
+# inputs, no thumbnails. Set DEMO_FAST_MODE=0 to restore the real pipeline.
+# See app/services/face_analysis/demo_config.py for the individual knobs.
+ENV DEMO_FAST_MODE=1
+
 WORKDIR /app
 
 RUN apt-get update \
