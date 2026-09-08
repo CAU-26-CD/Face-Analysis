@@ -207,7 +207,23 @@ S3_THUMBNAIL_PREFIX=thumbnails
 
 # Logging
 LOG_LEVEL=INFO
+
+# Demo fast mode — OFF by default. Opt in per-endpoint for a demo only.
+DEMO_FAST_MODE=0                  # 1 = enable the fast path below
+DEMO_FRAME_INTERVAL_SECONDS=1.0   # seconds between sampled frames
+DEMO_MAX_FRAMES=6                 # hard cap on sampled frames total
+DEMO_YOLO_IMGSZ=320               # YOLO person-detector input size
+DEMO_FACE_DET_SIZE=320            # InsightFace square det_size
+DEMO_SKIP_THUMBNAILS=0            # 1 = drop thumbnail crop+upload entirely
 ```
+
+> **Demo fast mode:** setting `DEMO_FAST_MODE=1` makes the analyzer sample only
+> a handful of frames and shrink both detector inputs so a full run finishes
+> in ~1-2s (warm worker). Identity matching and per-cluster thumbnails still
+> run, so the matching screen renders normally — only coverage is thinner.
+> Accuracy drops accordingly, so leave it off outside of demos. Set
+> `DEMO_SKIP_THUMBNAILS=1` to also drop the thumbnail step (matching screen
+> then has no face images).
 
 `S3_BUCKET_NAME`이 설정되어 있으면 boto3로 `s3_key`를 다운로드합니다. 설정되어 있지 않으면 `s3_url`을 직접 HTTP GET으로 다운로드합니다. thumbnail upload는 `S3_THUMBNAIL_BUCKET` 또는 `S3_BUCKET_NAME`이 있을 때만 수행됩니다.
 
@@ -285,6 +301,17 @@ FACE_ANALYZER_ONNX_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
 ```
 
 RunPod webhook은 사용하지 않습니다. 이 worker는 BE가 넘긴 `callback_url`로 직접 POST하고, `X-Analyzer-Secret` 헤더를 붙여 BE가 검증할 수 있게 합니다.
+
+### 데모용 빠른 분석 (`DEMO_FAST_MODE`)
+
+별도 endpoint 없이, **기존 endpoint에 환경 변수만 추가**하면 됩니다.
+
+1. RunPod endpoint 설정 → Environment Variables 에 `DEMO_FAST_MODE=1` 추가
+2. 최신 `:serverless` 이미지로 rollout (release 창에 short-sha 붙여넣기)
+3. 데모가 끝나면 `DEMO_FAST_MODE` 를 지우고 다시 rollout → 원래 정확도로 복귀
+
+세부 튜닝은 `DEMO_MAX_FRAMES` 등 위 [Environment Variables](#environment-variables)
+섹션 참고. 기본값은 OFF라서 변수를 안 넣으면 평소 파이프라인 그대로 돕니다.
 
 ## Test
 
