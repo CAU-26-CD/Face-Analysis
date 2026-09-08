@@ -14,9 +14,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV DECORD_EOF_RETRY_MAX=40960
 
 # DEMO BUILD ONLY (branch demo/fast-face-analysis). Trades accuracy for a
-# ~1-2s end-to-end analysis: a handful of sampled frames, smaller detector
-# inputs, no thumbnails. Set DEMO_FAST_MODE=0 to restore the real pipeline.
-# See app/services/face_analysis/demo_config.py for the individual knobs.
+# ~1-2s end-to-end analysis: a handful of sampled frames + smaller detector
+# inputs. Thumbnails stay on so the matching screen still shows faces (set
+# DEMO_SKIP_THUMBNAILS=1 to drop them). DEMO_FAST_MODE=0 restores the real
+# pipeline. See app/services/face_analysis/demo_config.py for all knobs.
 ENV DEMO_FAST_MODE=1
 
 WORKDIR /app

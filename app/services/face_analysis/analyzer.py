@@ -187,10 +187,14 @@ class FaceVideoAnalyzer:
         path = Path(video_path)
         known_actors = known_actors or []
 
-        if self._demo.enabled and thumbnail_dir is not None:
-            # Cropping + JPEG encode + S3 upload is pure latency the demo
-            # doesn't need. Callback just carries thumbnail_s3_key=None.
-            logger.info("DEMO_FAST_MODE: skipping thumbnail extraction")
+        if (
+            self._demo.enabled
+            and self._demo.skip_thumbnails
+            and thumbnail_dir is not None
+        ):
+            # Opt-in only (DEMO_SKIP_THUMBNAILS=1). By default the demo keeps
+            # thumbnails so the matching screen still shows a face per cluster.
+            logger.info("DEMO_SKIP_THUMBNAILS: skipping thumbnail extraction")
             thumbnail_dir = None
 
         self.person_tracker.reset()

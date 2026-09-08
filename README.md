@@ -216,13 +216,15 @@ DEMO_FRAME_INTERVAL_SECONDS=1.0   # seconds between sampled frames
 DEMO_MAX_FRAMES=6                 # hard cap on sampled frames total
 DEMO_YOLO_IMGSZ=320               # YOLO person-detector input size
 DEMO_FACE_DET_SIZE=320            # InsightFace square det_size
+DEMO_SKIP_THUMBNAILS=0            # 1 = drop thumbnail crop+upload entirely
 ```
 
 > **Demo fast mode:** when `DEMO_FAST_MODE` is on, the analyzer samples only
-> a handful of frames, shrinks both detector inputs, and skips thumbnail
-> extraction/upload so a full run finishes in ~1-2s (warm worker). Identity
-> matching still runs, but coverage is much thinner — this is for demos, not
-> real analysis.
+> a handful of frames and shrinks both detector inputs so a full run finishes
+> in ~1-2s (warm worker). Identity matching and per-cluster thumbnails still
+> run, so the matching screen renders normally — only coverage is thinner.
+> Set `DEMO_SKIP_THUMBNAILS=1` to also drop the thumbnail step (matching
+> screen then has no face images).
 
 `S3_BUCKET_NAME`이 설정되어 있으면 boto3로 `s3_key`를 다운로드합니다. 설정되어 있지 않으면 `s3_url`을 직접 HTTP GET으로 다운로드합니다. thumbnail upload는 `S3_THUMBNAIL_BUCKET` 또는 `S3_BUCKET_NAME`이 있을 때만 수행됩니다.
 
