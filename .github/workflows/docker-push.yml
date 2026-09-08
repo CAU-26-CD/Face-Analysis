@@ -2,7 +2,7 @@ name: Build and push Docker image
 
 on:
   push:
-    branches: [main, demo/fast-face-analysis]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -24,20 +24,9 @@ jobs:
       # RunPod's New release dialog rejects 40-char tags as digests, so we
       # publish a short (7-char) SHA tag alongside the full one — that's the
       # value you paste into RunPod to force a rollout.
-      #
-      # The moving tag is branch-scoped so the demo branch never clobbers the
-      # production image: main -> :serverless, demo/* -> :demo.
-      - name: Compute tags
+      - name: Compute short SHA
         id: vars
-        run: |
-          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          if [ "${GITHUB_REF_NAME}" = "main" ]; then
-            echo "moving_tag=serverless" >> "$GITHUB_OUTPUT"
-            echo "sha_prefix=" >> "$GITHUB_OUTPUT"
-          else
-            echo "moving_tag=demo" >> "$GITHUB_OUTPUT"
-            echo "sha_prefix=demo-" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -46,8 +35,8 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            lyemee/face-analyzer:${{ steps.vars.outputs.moving_tag }}
-            lyemee/face-analyzer:${{ steps.vars.outputs.sha_prefix }}${{ github.sha }}
-            lyemee/face-analyzer:${{ steps.vars.outputs.sha_prefix }}${{ steps.vars.outputs.short_sha }}
+            lyemee/face-analyzer:serverless
+            lyemee/face-analyzer:${{ github.sha }}
+            lyemee/face-analyzer:${{ steps.vars.outputs.short_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -5,12 +5,11 @@ This module exists solely so the demo build can finish a full analysis in
 the work down to a handful of sampled frames and shrinking the detector input
 sizes — accuracy drops accordingly, so this is NOT meant for production runs.
 
-Everything is driven by env vars and gated on ``DEMO_FAST_MODE``. On this
-branch the flag defaults to ON, so simply deploying the branch gives you the
-fast demo behaviour; set ``DEMO_FAST_MODE=0`` to fall back to the normal
-pipeline.
+Everything is driven by env vars and gated on ``DEMO_FAST_MODE``, which is
+OFF by default — the normal pipeline runs untouched unless you explicitly set
+``DEMO_FAST_MODE=1`` on the endpoint for a demo.
 
-    DEMO_FAST_MODE                 "1"/"0"  (default "1" on this branch)
+    DEMO_FAST_MODE                 "1"/"0"  (default "0" — opt in for demos)
     DEMO_FRAME_INTERVAL_SECONDS    float    seconds between sampled frames
     DEMO_MAX_FRAMES               int      hard cap on sampled frames total
     DEMO_YOLO_IMGSZ              int      YOLO person-detector input size
@@ -79,7 +78,7 @@ class DemoSettings:
 def demo_settings() -> DemoSettings:
     """Resolve the demo knobs from the environment once per process."""
     settings = DemoSettings(
-        enabled=_env_bool("DEMO_FAST_MODE", default=True),
+        enabled=_env_bool("DEMO_FAST_MODE", default=False),
         frame_interval_seconds=_env_float("DEMO_FRAME_INTERVAL_SECONDS", 1.0),
         max_frames=_env_int("DEMO_MAX_FRAMES", 6),
         yolo_imgsz=_env_int("DEMO_YOLO_IMGSZ", 320),

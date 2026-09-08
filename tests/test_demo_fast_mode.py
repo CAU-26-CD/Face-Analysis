@@ -55,16 +55,23 @@ def test_max_frames_rejects_non_positive():
         VideoFrameReader(max_frames=0)
 
 
-def test_demo_settings_defaults_on(monkeypatch):
+def test_demo_settings_defaults_off(monkeypatch):
     monkeypatch.delenv("DEMO_FAST_MODE", raising=False)
     monkeypatch.delenv("DEMO_SKIP_THUMBNAILS", raising=False)
     demo_settings.cache_clear()
     settings = demo_settings()
-    assert settings.enabled is True
+    # Off unless a demo endpoint explicitly opts in.
+    assert settings.enabled is False
     assert settings.max_frames >= 1
     assert settings.frame_interval_seconds > 0
     # Thumbnails stay on by default so the matching screen keeps its faces.
     assert settings.skip_thumbnails is False
+
+
+def test_demo_settings_can_be_enabled(monkeypatch):
+    monkeypatch.setenv("DEMO_FAST_MODE", "1")
+    demo_settings.cache_clear()
+    assert demo_settings().enabled is True
 
 
 def test_demo_skip_thumbnails_opt_in(monkeypatch):
