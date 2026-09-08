@@ -303,6 +303,22 @@ FACE_ANALYZER_ONNX_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
 
 RunPod webhook은 사용하지 않습니다. 이 worker는 BE가 넘긴 `callback_url`로 직접 POST하고, `X-Analyzer-Secret` 헤더를 붙여 BE가 검증할 수 있게 합니다.
 
+### Demo endpoint (branch `demo/fast-face-analysis`)
+
+`demo/fast-face-analysis` 브랜치에 push하면 CI가 production `:serverless`
+태그는 건드리지 않고 별도 태그로 이미지를 올립니다.
+
+- moving tag: `lyemee/face-analyzer:demo`
+- rollout용 태그: `lyemee/face-analyzer:demo-<short-sha>` (RunPod release 창에 붙여넣기)
+
+배포 절차:
+
+1. `demo/fast-face-analysis` 브랜치에 push → GitHub Actions가 이미지 빌드/push
+2. RunPod에서 **별도의 Serverless endpoint**를 만들어 image를 `lyemee/face-analyzer:demo`로 지정
+3. 환경 변수는 production과 동일하게 (`ANALYZER_SECRET`, AWS credentials, `S3_BUCKET_NAME`, `AWS_REGION`, `FACE_ANALYZER_DEVICE=cuda`). `DEMO_FAST_MODE=1`은 이미지에 기본 내장되어 있으므로 추가 설정 불필요 — 끄려면 `DEMO_FAST_MODE=0`
+4. 새 빌드 rollout이 필요하면 `demo-<short-sha>` 태그를 RunPod release 창에 붙여넣기
+5. BE 데모 설정에서 이 endpoint를 바라보게 함
+
 ## Test
 
 Unit test:
